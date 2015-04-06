@@ -1,0 +1,23 @@
+{% extends "base_template.html" %}
+{% block title %} 
+    {{ title }}
+{% endblock %}
+{% block content %}
+    <h1> {{ title }} </h1>
+    
+    <table class="table" style='width:50%'>
+        <tr>
+        {% for name in headings %}
+        <th> {{ name }} </th>
+        {% endfor %}
+        </tr>
+        {% for row in rows %}
+        <tr>
+            <td> <a href={{ '/items/' + row[0] }}>{{ row[0] }}</a> </td>
+            {% for item in row[1:] %}
+            <td> {{ item }} </td>
+            {% endfor %}
+        </tr>
+        {% endfor %}
+    </table>
+{% endblock %}

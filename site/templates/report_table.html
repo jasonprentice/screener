@@ -1,0 +1,44 @@
+{% extends "base_template.html" %}
+{% block title %} 
+    {{ title }}
+{% endblock %}
+{% block content %}
+
+<ul class="nav nav-tabs">
+  <li role="presentation" class="active"><a href="/">All Companies</a></li>
+  <li role="presentation"><a href="/screener/">Recommended Companies</a></li>  
+</ul>
+
+<div>
+    <h1> {{ title }} ( <a target="_blank" href="http://www.google.com/finance?q={{ ticker }}"> {{ ticker }} </a>) </h1>
+        
+        {% for table in tables %}
+        <div class="panel panel-default">
+            <div class="panel-heading">
+                <h3 class="panel-title"> {{ table[0] }} </h3>
+            </div>
+            <div class="panel-body">      
+            <div class="well" style='width:90%'>          
+                <table class="table" style='width:90%'>                
+                <tr>
+                <td style='width:30%'></td>
+                {% for yr,mo in headings %}
+                <td align='right'> <b>{{ mo }}, {{ yr }}</b> </td>
+                {% endfor %}
+                </tr>
+                {% for row in table[1] %}
+                <tr>
+                    <td style='width:30%'> <a href={{ '/items/' + row[0] }}>{{ row[0] }}</a> </td>
+                    {% for item in row[1:] %}
+                    <td style='width:10%' align='right'> {{ item }} </td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+                </table>
+            </div>
+            </div>
+        </div>
+        {% endfor %}
+</div>        
+    
+{% endblock %}

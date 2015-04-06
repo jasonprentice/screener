@@ -1,0 +1,82 @@
+{% extends "base_template.html" %}
+{% block title %} 
+     List by exchange 
+{% endblock %}
+{% block content %}
+<!--
+<div class="page-header">
+	<h1> Choose exchange: </h1>
+</div> -->
+
+<ul class="nav nav-tabs">
+  <li role="presentation" class="active"><a href="#">All Companies</a></li>
+  <li role="presentation"><a href="/screener/">Recommended Companies</a></li>  
+</ul>
+
+<div class="panel panel-default">
+	<div class="panel-body">
+		<ul class="nav nav-pills">	 
+		  <li role="presentation" {% if filter == 'nasdaq' %}class="active"{% endif %}><a href="/filter/nasdaq/1"> NASDAQ </a></li>
+		  <li role="presentation" {% if filter == 'nyse' %}class="active"{% endif %}><a href="/filter/nyse/1"> NYSE </a></li>
+		  <li role="presentation" {% if filter== 'amex' %}class="active"{% endif %}><a href="/filter/amex/1"> AMEX </a></li>
+		  <li role="presentation" {% if filter == 'otc' %}class="active"{% endif %}><a href="/filter/otc/1"> OTC </a></li>
+		
+  		  <!-- <li role="presentation" {% if filter== 'amex' %}class="active"{% endif %}><a href="/filter/amex/1"> LIST COMPANIES </a></li>
+		  <li role="presentation" {% if filter == 'otc' %}class="active"{% endif %}><a href="/screener"> SCREEN </a></li> 
+		 -->
+
+		  <form class="navbar-form navbar-left" role="search" method='POST' action='/companies/search'>
+	        <div class="form-group">
+	          <input type="text" class="form-control" name="ticker" placeholder="Ticker">
+	        </div>
+	        <button type="submit" class="btn btn-default">Search</button>
+	      </form>
+		</ul>
+	</div>
+  {% if filter %}    
+  <ul class="pagination">
+  	    {% if curpage == 1 %}
+	    <li class="disabled">	      		     
+	      <a href="#" aria-label="Previous">
+	    {% else %}
+	    <li>
+	      <a href="/filter/{{ filter }}/{{ curpage - 1 }}" aria-label="Previous">
+	    {% endif %}
+	        <span aria-hidden="true">&laquo;</span>
+	      </a>
+	    </li>
+	    {% for p in range(minpage,maxpage) %}
+	    <li {% if p+1==curpage %} class="active" {% endif %}><a href="/filter/{{ filter }}/{{p+1}}"> {{ p+1 }} </a></li>
+	    {% endfor %}
+	    {% if curpage == numpages %}
+	    <li class="disabled">	      		     
+	      <a href="#" aria-label="Next">
+	    {% else %}
+	    <li>
+	      <a href="/filter/{{ filter }}/{{ curpage + 1 }}" aria-label="Next">
+	    {% endif %}	    
+	        <span aria-hidden="true">&raquo;</span>
+	      </a>
+	    </li>	    
+	  </ul>
+	<table class="table" style='width:50%'>
+        <tr>
+        {% for name in headings %}
+        <th> {{ name }} </th>
+        {% endfor %}
+        </tr>
+        {% for row in rows %}
+        <tr>
+            <td> <a href={{ '/companies/' + row[2] }}>{{ row[0] }}</a> </td>
+            {% for item in row[1:] %}
+            <td> {{ item }} </td>
+            {% endfor %}
+        </tr>
+        {% endfor %}
+	    </table>
+  
+	  
+  {% endif %}
+</div>
+
+{% endblock %}

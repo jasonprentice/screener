@@ -1,0 +1,59 @@
+{% extends "base_template.html" %}
+{% block title %} 
+     Screener
+{% endblock %}
+{% block content %}
+<!--
+<div class="page-header">
+	<h1> Choose exchange: </h1>
+</div> -->
+
+<ul class="nav nav-tabs">
+  <li role="presentation"><a href="/">All Companies</a></li>
+  <li role="presentation" class="active"><a href="#">Recommended Companies</a></li>  
+</ul>
+
+<div>
+<h1> Buy </h1>
+<table class="table" style='width:50%'>
+    <tr>
+    
+    	<th> Name </th>
+    	<th> Ticker </th>
+    	<th> Exchange </th>
+    	<th> Score </th>
+    
+    </tr>
+    {% for row in rec_list %}
+    <tr>
+        <td> <a href={{ '/companies/' + row[3] }}>{{ row[0] }}</a> </td>
+        <td> {{ row[1] }} </td>
+        <td> {{ row[2] }} </td>
+        <td> {{ row[4] }} </td>        
+    </tr>
+    {% endfor %}
+</table>
+</div>
+<div>
+<h1> Short </h1>
+<table class="table" style='width:50%'>
+    <tr>
+    
+    	<th> Name </th>
+    	<th> Ticker </th>
+    	<th> Exchange </th>
+    	<th> Score </th>
+    
+    </tr>
+    {% for row in avoid_list %}
+    <tr>
+        <td> <a href={{ '/companies/' + row[3] }}>{{ row[0] }}</a> </td>
+        <td> {{ row[1] }} </td>
+        <td> {{ row[2] }} </td>
+        <td> {{ row[4] }} </td>        
+    </tr>
+    {% endfor %}
+</table>
+
+</div>
+{% endblock %}
