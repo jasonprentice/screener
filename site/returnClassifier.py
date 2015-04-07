@@ -11,10 +11,51 @@ from sklearn.cross_validation import train_test_split
 from sklearn.metrics import roc_curve, auc
 from sklearn.decomposition import PCA
 
+from sklearn.linear_model import LinearSVC
+from sklearn.feature_extraction import TfidfVectorizer
+
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 import seaborn as sbn
 
+
+class notesReader:
+  def __init__(self):
+    self.conn = psycopg2.connect("dbname=secdata user=vagrant password=pwd")
+    self.vectorizer = TfidfVectorizer(stop_words='english', min_df=3)
+
+  def __del__(self):
+    self.conn.close()
+
+  def load_data(self, years, exchanges=['NASDAQ','N','A','OTC']):
+    xchng_string = ""
+    for exchange in exchanges:
+      xchng_string = xchng_string + " OR exchange='" + exchange + "'"
+
+    yr_string = ""
+    for yr in years:
+        yr_string = yr_string + " OR year='" + str(yr)+"'"
+      
+    where_string = "(" + xchng_string[4:] + ") AND (" + yr_string[4:] + ") AND companies.cik IS NOT NULL;"    
+    sqlstring = "SELECT notes.cik, notes.year, notes.month, note_wordcount, financials.one_year_return FROM notes \
+                   INNER JOIN companies ON (notes.cik=companies.cik) WHERE " + where_string 
+
+    
+    self.featureData = pd.read_sql(sqlstring, self.conn, index_col = ['year','month','cik'])    
+
+    base_dir = '../data/edgar'
+    index = self.featureData.index
+    def gen_notes():
+      for tup in index:
+        yr = tup[0]
+        mo = tup[1]
+        cik = tup[2]
+        fname = base_dir + '/' + cik + '/' + yr + '/' + mo + '/notes_text.txt'
+        f = open(fname)
+        yield f.read()
+        f.close()
+
+    self.notes_bow = self.vectorizer.fit_transform(gen_notes)
 
 class returnPredictor:
 
