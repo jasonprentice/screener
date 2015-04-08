@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import os
 import sys
+import time
 
 from scipy.stats import rankdata
 
@@ -91,16 +92,22 @@ class notesTextReader:
 
   def train(self, index):
     gen_notes = self.load_data(index)    
+    t0 = time.clock()
     self.featureData = self.train_vectorizer.fit_transform(gen_notes())
-    tfidf = TfidfTransformer.fit(self.featureData);
+    t1 = time.clock()    
+    print t1 - t0
+    sys.stdout.flush()
+    tfidf = TfidfTransformer().fit(self.featureData);
     self.featureData = tfidf.transform(self.featureData, copy=False)
+    print (time.clock()-t1)
+    sys.stdout.flush()
     self.index = index
 
   def test(self, index):
     gen_notes = self.load_data(index)
     #self.test_vectorizer = TfidfVectorizer(stop_words='english', min_df=3, vocabulary=self.train_vectorizer.vocabulary_)
     self.featureData = HashingVectorizer(stop_words='english').fit_transform(gen_notes())
-    tfidf = TfidfTransformer.fit(self.featureData);
+    tfidf = TfidfTransformer().fit(self.featureData);
     self.featureData = tfidf.transform(self.featureData, copy=False)
     self.index = index
 
@@ -550,7 +557,7 @@ class returnPredictor:
       #p = rfc_feature
       p = self.final_svc.decision_function(np.concatenate([svc_feature, rfc_feature], axis=1))
     else:
-      p = np.expand_dims(self.rfc.predict_proba(self.test_data['values'])[:,1], axis=1)
+      p = pipe[self.model].decision_function(self.test_data)
     # try:
     #   p = self.pipe[self.model].decision_function(self.test_data)    
     # except:
