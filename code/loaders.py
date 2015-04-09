@@ -15,25 +15,21 @@ class notesCountReader:
   def __del__(self):
     self.conn.close()
 
-  def load_data(self, years, exchanges=['NASDAQ','N','A','OTC']):
-    xchng_string = ""
-    for exchange in exchanges:
-      xchng_string = xchng_string + " OR exchange='" + exchange + "'"
+  def load_data(self, rel_to, datestr, exchanges=['NASDAQ','N','A','OTC']):
+    direction = {'before': '<', 'after': '>'}
+    xchng_string = 'exchange=' + ' OR exchange='.join(exchanges)    
+    time_string = "to_date( month || ' ' || year, 'MM YYYY') %s to_date( %s, 'MM YYYY')" % (direction[rel_to], datestr)      
+    where_string = "(%s) AND (%s) AND companies.cik IS NOT NULL;" % (xchng_string, time_string)
+    cols = ['notes.cik', 'to_date(month || \' \' || year, \'MM YYYY\') AS date', 'note_wordcount']
 
-    yr_string = ""
-    for yr in years:
-        yr_string = yr_string + " OR year='" + str(yr)+"'"
-      
-    where_string = "(" + xchng_string[4:] + ") AND (" + yr_string[4:] + ") AND companies.cik IS NOT NULL;"
-    sqlstring = "SELECT notes.cik, notes.year, notes.month, note_wordcount FROM notes \
-                   INNER JOIN companies ON (notes.cik=companies.cik) WHERE " + where_string 
+    sqlstring = "SELECT %s FROM notes INNER JOIN companies ON (notes.cik=companies.cik) WHERE %s" % (', '.join(cols), where_string)
 
     
-    individual_notes = pd.read_sql(sqlstring, self.conn, index_col = ['year','month','cik'])    
+    individual_notes = pd.read_sql(sqlstring, self.conn, index_col = ['date','cik'])    
 
     def aggregator(df):
       return pd.Series([df.sum(), df.shape[0]], index=['num_words','num_notes'])
-    return individual_notes.groupby(level=['year','month','cik']).apply(aggregator)    
+    return individual_notes.groupby(level=['date','cik']).apply(aggregator)    
 
   def train(self, params):    
     self.featureData = self.load_data(params['years'],params['exchanges'])
