@@ -4,7 +4,7 @@ import os
 import pandas as pd
 import numpy as np
 
-from sklearn.feature_extraction.text import HashingVectorizer, TfidfTransformer
+from sklearn.feature_extraction.text import TfidfVectorizer
 
 
 class notesCountReader:
@@ -48,7 +48,7 @@ class notesCountReader:
 class notesTextReader:
   def __init__(self):
     self.conn = psycopg2.connect("dbname=secdata user=vagrant password=pwd")
-    self.train_vectorizer = HashingVectorizer(stop_words='english')
+    self.train_vectorizer = TfidfVectorizer(stop_words='english', min_df=3, ngram_range=(3,3))
                                      
     self.featureData = pd.DataFrame()
 
@@ -78,17 +78,17 @@ class notesTextReader:
     
     self.featureData = self.train_vectorizer.fit_transform(gen_notes())
         
-    tfidf = TfidfTransformer().fit(self.featureData);
-    self.featureData = tfidf.transform(self.featureData, copy=False)
+    #tfidf = TfidfTransformer().fit(self.featureData);
+    #self.featureData = tfidf.transform(self.featureData, copy=False)
     
     self.index = index
 
   def test(self, index):
     gen_notes = self.load_data(index)
     #self.test_vectorizer = TfidfVectorizer(stop_words='english', min_df=3, vocabulary=self.train_vectorizer.vocabulary_)
-    self.featureData = HashingVectorizer(stop_words='english').fit_transform(gen_notes())
-    tfidf = TfidfTransformer().fit(self.featureData);
-    self.featureData = tfidf.transform(self.featureData, copy=False)
+    self.featureData = TfidfVectorizer(stop_words='english', vocabulary=self.train_vectorizer.vocabulary_).fit_transform(gen_notes())
+    # tfidf = TfidfTransformer().fit(self.featureData);
+    # self.featureData = tfidf.transform(self.featureData, copy=False)
     self.index = index
 
 
