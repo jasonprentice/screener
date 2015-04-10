@@ -89,7 +89,7 @@ class returnPredictor:
     self.financials = loaders.financialsReader()    
     self.notescount = loaders.notesCountReader()
     self.notestext = loaders.notesTextReader()
-    self.returns = loaders.returnsReader()
+    self.returns = loaders.returnsReader(return_dur='quarterly')
 
     self.rfc = RandomForestClassifier(n_estimators=30,criterion='gini',max_features='auto',max_depth=5)
     self.svc = LinearSVC()
@@ -122,36 +122,41 @@ class returnPredictor:
 
 
 
-  def train(self, threshold, criterion, years=[], exchanges=[], model='values'):
+  def train(self, threshold, criterion, datestr=None, exchanges=[], model='values'):
     # Train classifier: threshold, criterion - see apply_threshold() below
     #                   if plot=True, chart most important features
 
     self.model = model
-    if years and exchanges:
-      params = {'years': years, 'exchanges': exchanges}
+    if datestr and exchanges:
+      params = {'before': datestr, 'exchanges': exchanges}
       
-      print "Reading financial values..."
-      sys.stdout.flush()
+      # print "Reading financial values..."
+      # sys.stdout.flush()
       self.financials.train(params)
       index = self.financials.index
 
-      print "Reading notes wordcount..."
-      sys.stdout.flush()
+      # print "Reading notes wordcount..."
+      # sys.stdout.flush()
       self.notescount.train(params)
       index = index.intersection(self.notescount.index)
-      print "Reading returns..."
-      sys.stdout.flush()
+
+      # print "Reading returns..."
+      # sys.stdout.flush()
       self.returns.train(params)
       index = index.intersection(self.returns.index)
           
       X = pd.concat([self.financials.featureData.reindex(index), self.notescount.featureData.reindex(index)], axis=1)
       
-      print "Reading notes text..."
-      sys.stdout.flush()
-      self.notestext.train(index)
+      if self.model != 'values':
+        # print "Reading notes text..."
+        # sys.stdout.flush()
+        self.notestext.train(index)
+        notesData = self.notestext.featureData
+      else:
+        notesData = []
 
       self.train_index = index
-      self.train_data = {'values': X, 'notes': self.notestext.featureData}
+      self.train_data = {'values': X, 'notes': notesData}
 
     self.train_y = self.returns.apply_threshold(threshold, criterion)    
     self.train_y = self.train_y.reindex(self.train_index)
@@ -186,36 +191,39 @@ class returnPredictor:
       print vocab[ind]
 
 
-  def evaluate(self, threshold,criterion, years=[], exchanges=[], plot=True):
+  def evaluate(self, threshold,criterion, before=None, after=None, exchanges=[], plot=True):
     # Evaluate performance. If plot=True, display ROC curve and list top-scoring companies with their actual returns.
     
-    if years and exchanges:
-      params = {'years': years, 'exchanges': exchanges}
+    if (before or after) and exchanges:
+      params = {'before': before, 'after':after, 'exchanges': exchanges}
 
      
-      print "Reading financial values..."
-      sys.stdout.flush()
+      # print "Reading financial values..."
+      # sys.stdout.flush()
       self.financials.test(params)
       index = self.financials.index
 
-      print "Reading notes wordcount..."
-      sys.stdout.flush()
+      # print "Reading notes wordcount..."
+      # sys.stdout.flush()
       self.notescount.test(params)
       index = index.intersection(self.notescount.index)
 
-      print "Reading returns..."
-      sys.stdout.flush()
+      # print "Reading returns..."
+      # sys.stdout.flush()
       self.returns.test(params)
       index = index.intersection(self.returns.index)
               
       X = pd.concat([self.financials.featureData.reindex(index), self.notescount.featureData.reindex(index)], axis=1)
      
+      if self.model != 'values':
+        # print "Reading notes text..."
+        # sys.stdout.flush()
+        self.notestext.test(index)
+        notesData = self.notestext.featureData
+      else:
+        notesData = []
 
-      print "Reading notes text..."
-      sys.stdout.flush()
-      self.notestext.test(index)
-
-      self.test_data = {'values': X, 'notes': self.notestext.featureData}
+      self.test_data = {'values': X, 'notes': notesData}
       self.test_index = index
 
     self.test_y = self.returns.apply_threshold(threshold, criterion)    
@@ -231,18 +239,18 @@ class returnPredictor:
       plt.show()
       #p = rfc_feature
       p = self.final_svc.decision_function(np.concatenate([svc_feature, rfc_feature], axis=1))
-    else:
-      p = pipe[self.model].decision_function(self.test_data)
-    # try:
-    #   p = self.pipe[self.model].decision_function(self.test_data)    
-    # except:
-    #   p = self.pipe[self.model].predict_proba(self.test_data)[:,1]
+    else:      
+      try:
+        p = self.pipe[self.model].decision_function(self.test_data)    
+      except:
+        p = self.pipe[self.model].predict_proba(self.test_data)[:,1]
     w = pd.Series(p.ravel(), index=self.test_index)
     
     fpr,tpr,thresh = roc_curve(self.test_y, w)
     roc_auc = auc(fpr,tpr)
     if plot:
       self.show_ROC(fpr,tpr,thresh,roc_auc)
+    return roc_auc
 
 
     # tmp = pd.merge(self.returns.reset_index(), self.company_info.reset_index(), on='cik', how='inner')
@@ -304,10 +312,6 @@ class returnPredictor:
 
     else:
         print "No feature %(name)s" % {'name':feature_name}
-
- 
- 
-
 
   def apply_model(self):
       if self.pre_pca:

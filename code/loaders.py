@@ -6,6 +6,26 @@ import numpy as np
 
 from sklearn.feature_extraction.text import HashingVectorizer, TfidfTransformer
 
+def query_db(conn, table, cols, before=None, after=None, constraints=[], exchanges=['NASDAQ','N','A','OTC']):
+  direction = {'before': '<', 'after': '>'} 
+  xchng_string = 'exchange=' + ' OR exchange='.join(["\'%s\'"%x for x in exchanges])    
+  if before:
+    before_string = ["to_date( month || ' ' || year, 'MM YYYY') < to_date(\'%s\', 'MM YYYY') " % before]
+  else:
+    before_string = []
+  if after:
+    after_string = ["to_date( month || ' ' || year, 'MM YYYY') > to_date(\'%s\', 'MM YYYY') " % after]
+  else:
+    after_string = []
+  time_string = " AND ".join(before_string + after_string)
+  constraints = constraints + ['('+xchng_string+')', '('+time_string+')', 'companies.cik IS NOT NULL']
+  where_string = ' AND '.join(constraints)     
+  cols = cols + ['%s.cik'%table, 'to_date(month || \' \' || year, \'MM YYYY\') AS date']
+  
+  sqlstring = "SELECT %s FROM %s INNER JOIN companies ON (%s.cik=companies.cik) WHERE %s;" % (', '.join(cols), table,table, where_string)
+  
+  return pd.read_sql(sqlstring, conn, index_col = ['date','cik'], parse_dates=['date'])        
+
 
 class notesCountReader:
   def __init__(self):
@@ -15,31 +35,21 @@ class notesCountReader:
   def __del__(self):
     self.conn.close()
 
-  def load_data(self, rel_to, datestr, exchanges=['NASDAQ','N','A','OTC']):
-    direction = {'before': '<', 'after': '>'}
-    xchng_string = 'exchange=' + ' OR exchange='.join(exchanges)    
-    time_string = "to_date( month || ' ' || year, 'MM YYYY') %s to_date( %s, 'MM YYYY')" % (direction[rel_to], datestr)      
-    where_string = "(%s) AND (%s) AND companies.cik IS NOT NULL;" % (xchng_string, time_string)
-    cols = ['notes.cik', 'to_date(month || \' \' || year, \'MM YYYY\') AS date', 'note_wordcount']
-
-    sqlstring = "SELECT %s FROM notes INNER JOIN companies ON (notes.cik=companies.cik) WHERE %s" % (', '.join(cols), where_string)
-
+  def load_data(self, before=None, after=None, exchanges=['NASDAQ','N','A','OTC']):            
+    individual_notes = query_db(self.conn, 'notes', ['note_wordcount'], before=before, after=after, exchanges=exchanges)
     
-    individual_notes = pd.read_sql(sqlstring, self.conn, index_col = ['date','cik'])    
-
     def aggregator(df):
       return pd.Series([df.sum(), df.shape[0]], index=['num_words','num_notes'])
     return individual_notes.groupby(level=['date','cik']).apply(aggregator)    
 
   def train(self, params):    
-    self.featureData = self.load_data(params['years'],params['exchanges'])
-    self.index = self.featureData.index
-
-  def test(self, params):
-    self.featureData = self.load_data(params['years'],params['exchanges'])
+    self.featureData = self.load_data(before = params['before'], exchanges= params['exchanges'])
     self.index = self.featureData.index
     
-
+  def test(self, params):
+    self.featureData = self.load_data(before = params['before'], after=params['after'], exchanges=params['exchanges'])
+    self.index = self.featureData.index
+    
 
 class notesTextReader:
   def __init__(self):
@@ -56,9 +66,9 @@ class notesTextReader:
     base_dir = '../data/edgar'       
     def gen_notes():
       for tup in index:
-        yr = tup[0]
-        mo = tup[1]
-        cik = tup[2]
+        yr = '%4d' % tup[0].year        
+        mo = '%02d' % tup[0].month        
+        cik = tup[1]
         fname = base_dir + '/' + cik + '/' + yr + '/' + mo + '/notes_text.txt'
         if os.path.isfile(fname):
           f = open(fname)
@@ -183,38 +193,18 @@ class financialsReader:
     self.features['CFRatioOperating'] = '(netcashprovidedbyusedinoperatingactivities / NULLIF(cashandcashequivalentsperiodincreasedecrease,0))'
     self.features['CFRatioFinancing'] = '(netcashprovidedbyusedinfinancingactivities / NULLIF(cashandcashequivalentsperiodincreasedecrease,0))'
 
-  def load_data(self, years, exchanges=['NASDAQ','N','A','OTC']):
+  def load_data(self, before=None, after=None, exchanges=['NASDAQ','N','A','OTC']):
     # Read data, limiting to specified years and exchanges
-    MAX_mktcap = 1e12
-
-    xchng_string = ""
-    for exchange in exchanges:
-      xchng_string = xchng_string + " OR exchange='" + exchange + "'"
-
-    yr_string = ""
-    for yr in years:
-        yr_string = yr_string + " OR year='" + str(yr)+"'"
-      
-    where_string = "(" + xchng_string[4:] + ") AND (" + yr_string[4:] + ") AND companies.cik IS NOT NULL AND one_year_return <> 'NaN' AND assets > 0 AND marketcap > 0 AND marketcap < " + str(MAX_mktcap) + ";"
-    
-    sqlstring = "SELECT financials.cik, year, month, "
-    for (i,name) in enumerate(self.features.keys()):
-        sqlstring = sqlstring + self.features[name] + " AS " + name + ", "
-    
-    sqlstring = sqlstring[:-2] + " FROM financials INNER JOIN companies ON (financials.cik=companies.cik) WHERE " + where_string
-    
-    featureData = pd.read_sql(sqlstring, self.conn, index_col = ['year','month','cik'])
+    MAX_mktcap = 1e12           
+    constraints = ['one_year_return <> \'NaN\'', 'assets>0', 'marketcap>0', 'marketcap<%s'%str(MAX_mktcap)]
+    cols = ['%s AS %s' % (v,k) for (k,v) in self.features.iteritems()]
+    featureData = query_db(self.conn, 'financials', cols, before=before, after=after, constraints=constraints, exchanges=exchanges)
     featureData = featureData.fillna(0)
     
     self.company_info = pd.read_sql("SELECT cik, name, ticker FROM companies;", self.conn, index_col = 'cik')
-
-    cik_idx = set()
-    for yr in years:
-        ix = featureData.loc[yr].index
-        for cik in ix:
-            cik_idx.add(cik[1])
-    self.company_info = self.company_info.loc[cik_idx]
-    
+    self.company_info = self.company_info.groupby(level='cik').apply(lambda df: df.iloc[0])
+    self.company_info = self.company_info.reindex(featureData.reset_index('cik').cik.unique())
+  
     def strip_coname(name):
         ix = name.lower().find("common stock")
         name = name[:ix].rstrip()
@@ -227,11 +217,11 @@ class financialsReader:
            
 
   def train(self, params):    
-    self.featureData = self.load_data(params['years'],params['exchanges'])
+    self.featureData = self.load_data(before=params['before'], exchanges=params['exchanges'])
     self.index = self.featureData.index
     
   def test(self, params):
-    self.featureData = self.load_data(params['years'],params['exchanges'])
+    self.featureData = self.load_data(after=params['after'], before=params['before'], exchanges=params['exchanges'])
     self.index = self.featureData.index
     
 
@@ -247,29 +237,20 @@ class returnsReader:
   def __del__(self):
     self.conn.close()
 
-  def load_data(self, years, exchanges=['NASDAQ','N','A','OTC']):
-    # Read data, limiting to specified years and exchanges
-    
-    xchng_string = ""
-    for exchange in exchanges:
-      xchng_string = xchng_string + " OR exchange='" + exchange + "'"
-
-    yr_string = ""
-    for yr in years:
-        yr_string = yr_string + " OR year='" + str(yr)+"'"
-      
-    where_string = "(" + xchng_string[4:] + ") AND (" + yr_string[4:] + ") AND companies.cik IS NOT NULL AND " + self.return_field + " <> 'NaN';"
-            
-    return pd.read_sql("SELECT financials.cik, year, month, " + self.return_field + " FROM financials INNER JOIN companies ON (financials.cik=companies.cik) WHERE " + where_string, self.conn, index_col = ['year','month','cik'])
+  def load_data(self, before=None, after=None, exchanges=['NASDAQ','N','A','OTC']):
+    # Read data, limiting to specified years and exchanges              
+    constraints = ['%s <> \'NaN\''%self.return_field]    
+    cols = [self.return_field]
+    return query_db(self.conn, 'financials', cols, before=before, after=after, constraints=constraints, exchanges=exchanges)
     
   def train(self, params):    
-    self.featureData = self.load_data(params['years'],params['exchanges'])
+    self.featureData = self.load_data(before=params['before'], exchanges=params['exchanges'])
     self.index = self.featureData.index
     
   def test(self, params):
-    self.featureData = self.load_data(params['years'],params['exchanges'])
+    self.featureData = self.load_data(after=params['after'], before=params['before'], exchanges= params['exchanges'])
     self.index = self.featureData.index
-    
+        
 
   def apply_threshold(self, threshold, criterion):
   # Apply a threshold to convert returns in y to binary variable. 
@@ -301,7 +282,7 @@ class returnsReader:
           y_out.loc[ret <= q] = 0
           return y_out
 
-        output = self.featureData[self.return_field].groupby(level=['year','month']).transform(thresh_quant)            
+        output = self.featureData[self.return_field].groupby(level=['date']).transform(thresh_quant)            
     elif criterion == 'bottomquant':
       # Bottom quantile within time period
         def thresh_quant(ret):
@@ -311,7 +292,7 @@ class returnsReader:
           y_out.loc[ret <= q] = 1
           return y_out
 
-        output = self.featureData[self.return_field].groupby(level=['year','month']).transform(thresh_quant)            
+        output = self.featureData[self.return_field].groupby(level=['date']).transform(thresh_quant)            
         
     else:
         raise error("Criterion must be one of: 'lt', 'gt', 'in', 'out', 'topquant', 'bottomquant'")
