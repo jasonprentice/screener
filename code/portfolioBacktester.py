@@ -188,6 +188,8 @@ class Portfolio:
 			self.commit(date)
 		
 
+		
+
 class portfolioBacktester:
 	def __init__(self):
 		self.conn = psycopg2.connect('dbname=secdata user=vagrant password=pwd')
