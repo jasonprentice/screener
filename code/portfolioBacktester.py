@@ -3,14 +3,22 @@ import numpy as np
 import psycopg2
 import pickle
 import heapq
+import datetime
 from collections import namedtuple
+import matplotlib.pyplot as plt
+from scipy.stats import linregress
+
 
 def next_trading_price(date, pr):	
-	while date <= pr.index.max():
+	date0 = date
+	while date <= date0 + np.timedelta64(3,'D'):		
+		
 		try:
 			cur_pr = pr.loc[date]
 			if not pd.isnull(cur_pr):
 				return cur_pr
+			else:
+				date += np.timedelta64(1,'D')	
 		except:
 			date += np.timedelta64(1,'D')
 	return None	
@@ -44,9 +52,10 @@ class Portfolio:
 		self.cash = 0
 
 	def construct(self, ciks, weights, date, value=1):
-		for (cik, weight) in zip(ciks,weights):	
-			pr = self.load_stock(cik)
+		for (cik, weight) in zip(ciks,weights):							
+			pr = self.load_stock(cik)			
 			cur_price = next_trading_price(date, pr)
+
 			if cur_price:
 				self.num_shares.loc[cik] = value * weight / cur_price
 			else:
@@ -166,8 +175,9 @@ class Portfolio:
 		return self
 
 	@checkdate	
-	def fastforward(self,date):
+	def fastforward(self,date=None):
 		self.commit(date)
+		return self
 
 	@checkdate	
 	def sell(self, ciks, amount, date, commit=True):
@@ -188,21 +198,101 @@ class Portfolio:
 			self.commit(date)
 		
 
-		
 
 class portfolioBacktester:
-	def __init__(self):
-		self.conn = psycopg2.connect('dbname=secdata user=vagrant password=pwd')
-		f = open('../data/edgar/prices_all_months_all_stocks.pickle','r')
-		self.prices = pickle.load(f)
-		f.close()
-
-		self.weights = pd.Series(np.zeros(prices.shape[1]), index=prices.columns)
+	def __init__(self, inception_date):
+		self.inception_date = inception_date
+		self.strategies = {}
+		self.FF = self.read_FF()
+		self.FF = self.FF.loc[self.FF.index >= self.inception_date]
 
 
-	def __del__(self):
-		self.conn.close()
+	def read_FF(self):
+	    fname = '../data/F-F_Research_Data_Factors.txt'
+	    f = open(fname,'r')
+	    rows = f.read().split('\n')
+	    vals = []
+	    index = []
+	    for row in rows[1:]:
+	        items = row.split()
+	        if items:            
+	            date = items[0]
+	            vals.append({'Mkt-RF': float(items[1]), 
+	            	         'SMB': float(items[2]),
+	            	         'HML': float(items[3]), 
+	            	         'RF': float(items[4])})
+	            year = date[:4]
+	            mo = date[-2:]
+	            index.append(pd.Period(year+'-'+mo,'M'))
+	    return pd.DataFrame(vals, index=index)
 
-	#def binned_returns(self, begin, duration=np.timedelta64(1,'M')):
-	
-	#def rebalance(weights, t):
+
+	def create_strategy(self, name, ciks, weights):
+		norm = abs(sum(weights))
+		weights = map(lambda w: w/norm, weights)
+		self.strategies[name] = Portfolio(ciks, weights, self.inception_date)
+
+	def values(self, begin, end):
+		tindex = pd.date_range(begin,end,freq='D')
+		df = pd.DataFrame(columns=self.strategies.keys(), index=tindex)
+		for name, p in self.strategies.iteritems():
+			try:
+				v = p.fastforward(date=end).values()
+			except:
+				v = p.values()
+			df[name] = pd.Series(map(lambda t: next_trading_price(t,v), tindex), index=tindex)			
+		return df
+
+	def binned_returns(self, begin, end):
+		tbins = pd.date_range(begin,end,freq='M')
+		df = pd.DataFrame(columns=self.strategies.keys(), index=pd.PeriodIndex(tbins[:-1].values, freq='M'))
+		for name, p in self.strategies.iteritems():
+			try:
+				v = p.fastforward(date=end).values()
+			except:
+				v = p.values()
+			
+			vsub = pd.Series(map(lambda t: next_trading_price(t,v), tbins), index=tbins)
+			delta = np.diff(vsub.values)
+			df[name] = pd.Series(12 * 10 * delta / vsub.values[:-1], index=pd.PeriodIndex(tbins[:-1].values, freq='M'))
+		return df
+
+	def CAPM(self,end, strat):
+		ret = self.binned_returns(self.inception_date, end)		
+		
+		tmp = pd.DataFrame(index = ret[strat].index)
+		tmp['y'] = (ret[strat] - self.FF['RF'])
+		tmp['ones'] = 1
+		tmp['Mkt_RF'] = self.FF['Mkt-RF']
+		tmp['HML'] = self.FF['HML']
+		tmp['SMB'] = self.FF['SMB']
+		tmp = tmp.loc[pd.notnull(tmp['y'])]
+		
+		y = tmp.y.values
+		X = tmp.drop('y',1).values		
+		
+		beta = np.linalg.lstsq(X, y)[0]
+		
+		print 'alpha = %0.2f' % beta[0]
+		print 'Mkt beta = %0.2f' % beta[1] 
+		print 'HML beta = %0.2f' % beta[2]
+		print 'SMB beta = %0.2f' % beta[3]
+		plt.scatter(self.FF['Mkt-RF'], ret[strat] - self.FF['RF'])
+		xmin, xmax = plt.xlim()
+
+		plt.plot([xmin,xmax], [beta[0] + beta[1]*xmin, beta[0] + beta[1]*xmax])
+		plt.show()
+
+
+	# def FamaFrench(self,end,strat):
+
+	# def regress(self, )
+
+
+
+
+
+
+
+
+
