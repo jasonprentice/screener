@@ -178,6 +178,12 @@ class returnPredictor:
     else:
       self.pipe[model] = self.pipe[model].fit(self.train_data, self.train_y)
 
+    print 'Min train period: '
+    print self.train_y.reset_index().date.min()
+    print 'Max train period: '
+    print self.train_y.reset_index().date.max()
+
+
   def top_ngrams(self, n=10):
     vocab = self.notestext.train_vectorizer.get_feature_names()
     X = self.train_data['notes']
@@ -200,19 +206,21 @@ class returnPredictor:
      
       # print "Reading financial values..."
       # sys.stdout.flush()
-      self.financials.test(params)
+      most_recent=True
+      self.financials.test(params,most_recent=most_recent)
       index = self.financials.index
-
+      
       # print "Reading notes wordcount..."
       # sys.stdout.flush()
-      self.notescount.test(params)
+      self.notescount.test(params, most_recent=most_recent)
       index = index.intersection(self.notescount.index)
-
+      
       # print "Reading returns..."
       # sys.stdout.flush()
-      self.returns.test(params)
+      self.returns.test(params, most_recent=most_recent)
       index = index.intersection(self.returns.index)
-              
+      
+
       X = pd.concat([self.financials.featureData.reindex(index), self.notescount.featureData.reindex(index)], axis=1)
      
       if self.model != 'values':
@@ -230,6 +238,11 @@ class returnPredictor:
     self.test_y = self.test_y.reindex(self.test_index)
 
     print "Evaluating model %s (%d examples)..." % (self.model, len(self.test_index))
+
+    print 'Min train period: '
+    print self.test_y.reset_index().date.min()
+    print 'Max train period: '
+    print self.test_y.reset_index().date.max()
     sys.stdout.flush()
 
     if self.model=='all':
@@ -314,27 +327,36 @@ class returnPredictor:
         print "No feature %(name)s" % {'name':feature_name}
 
   def apply_model(self):
-      if self.pre_pca:
-          ranks = self.convert_features_to_ranks(self.featureData.values)
-          X = self.princomp.transform(ranks)
-      else:
-          X = self.featureData.values
-
-      p = self.clf.predict_proba(X)
+    if self.model=='all':
+      svc_feature = np.expand_dims(self.svc.decision_function(self.test_data['notes']), axis=1)
+      rfc_feature = np.expand_dims(self.rfc.predict_proba(self.test_data['values'])[:,1], axis=1)      
+      p = self.final_svc.decision_function(np.concatenate([svc_feature, rfc_feature], axis=1))
+    else:      
+      try:
+        p = self.pipe[self.model].decision_function(self.test_data)    
+      except:
+        p = self.pipe[self.model].predict_proba(self.test_data)[:,1]
+    w = pd.Series(p.ravel(), index=self.test_index)
       
-      return p
+    return w
 
   def recommend(self, threshold, criterion, n=10, avoid=False):
     # List top n stocks and their scores
 
-      tmp = pd.merge(self.returns.reset_index(), self.company_info.reset_index(), on='cik', how='inner')        
+      #tmp = pd.merge(self.returns.featureData.reset_index(), self.financials.company_info.reset_index(), on='cik', how='inner')        
 #        tmp = tmp.set_index(['year','month','cik'])
-      
-      p = self.apply_model()
-      w = p[:,1]
-      tmp['w'] = pd.Series(w, index=self.returns.reset_index().index)
+
+      tmp = pd.DataFrame(index=self.test_index, columns=['w'])
+      tmp['w'] = self.apply_model()      
+      tmp = tmp.reset_index()      
+
+      # max_score = tmp['w'].max()
+      # scores = tmp.loc[tmp['w'] > 0.75*max_score, 'w']
+      # top_ciks = tmp.loc[tmp['w']>0.75*max_score, 'cik']
+
       tmp = tmp.sort(columns=['w'],ascending=False,)
       
+
       if avoid:
         top_ciks = list(tmp['cik'].values)[-n:]
         scores = list(tmp['w'].values)[-n:]
@@ -342,6 +364,7 @@ class returnPredictor:
         top_ciks = list(tmp['cik'].values)[0:n]
         scores = list(tmp['w'].values)[0:n]
 
+      print '%d scores in range (%0.2f, %0.2f)' % (len(scores), min(scores), max(scores))
       return zip(top_ciks, scores)
 
 
@@ -369,6 +392,31 @@ class returnPredictor:
           with open("../TreeDiagrams/tree"+str(i)+".dot", 'w') as f:
               f = tree.export_graphviz(DT, out_file=f, feature_names=self.features.keys())
               f.close()
+
+  def mkt_portfolio(self, n=500):     
+      
+      tmp = self.test_data['values'].reset_index().sort(columns=['marketcap'],ascending=False)
+      top_ciks = list(tmp['cik'].values)[0:n]
+      #scores = list(tmp['marketcap'].values)[0:n]
+      scores = [1.0]*n
+      return zip(top_ciks, scores)
+
+  def momentum_portfolio(self, n=100):
+      def max_date(g):
+        g = g.reset_index()
+        g = g.iloc[g['date'].argmax()]
+        g = g.drop('cik')
+        return g
+      
+      df = pd.DataFrame({'y':self.train_y}, index=self.train_y.index)
+      last_y = df.groupby(level='cik').apply(max_date).reset_index().set_index(['date'])
+      
+      ciks = last_y.cik.values
+      y = last_y.y.values
+      pos = ciks[y==1]
+      np.random.shuffle(pos)
+      return zip(pos[:n], [1.0]*n)
+
 
 
   def feature_importance(self):

@@ -8,34 +8,34 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 
 def query_db(conn, table, cols, before=None, after=None, constraints=[], exchanges=['NASDAQ','N','A','OTC']):
   direction = {'before': '<', 'after': '>'} 
-  xchng_string = 'exchange=' + ' OR exchange='.join(["\'%s\'"%x for x in exchanges])    
+  xchng_string = '(exchange=' + ' OR exchange='.join(["\'%s\'"%x for x in exchanges]) + ')'
+  cons = constraints + [xchng_string]
   if before:
-    before_string = ["to_date( month || ' ' || year, 'MM YYYY') < to_date(\'%s\', 'MM YYYY') " % before]
-  else:
-    before_string = []
+    cons = cons + ["(to_date( month || ' ' || year, 'MM YYYY') < to_date(\'%s\', 'MM YYYY')) " % before]  
   if after:
-    after_string = ["to_date( month || ' ' || year, 'MM YYYY') > to_date(\'%s\', 'MM YYYY') " % after]
-  else:
-    after_string = []
-  time_string = " AND ".join(before_string + after_string)
-  constraints = constraints + ['('+xchng_string+')', '('+time_string+')', 'companies.cik IS NOT NULL']
-  where_string = ' AND '.join(constraints)     
+    cons = cons + ["(to_date( month || ' ' || year, 'MM YYYY') > to_date(\'%s\', 'MM YYYY')) " % after]
+  
+  cons = cons + ['companies.cik IS NOT NULL']
+  
+  where_string = ' AND '.join(cons)     
   cols = cols + ['%s.cik'%table, 'to_date(month || \' \' || year, \'MM YYYY\') AS date']
   
-  sqlstring = "SELECT %s FROM %s INNER JOIN companies ON (%s.cik=companies.cik) WHERE %s;" % (', '.join(cols), table,table, where_string)
+  sqlstring = "SELECT %s FROM %s INNER JOIN companies ON (%s.cik=companies.cik) WHERE %s;" % (', '.join(cols), table,table, where_string)  
   
-  return pd.read_sql(sqlstring, conn, index_col = ['date','cik'], parse_dates=['date'])        
+  data = pd.read_sql(sqlstring, conn, index_col = ['date','cik'], parse_dates=['date'])        
+  return data
 
 
 class notesCountReader:
   def __init__(self):
     self.conn = psycopg2.connect("dbname=secdata user=vagrant password=pwd")    
-    self.featureData = pd.DataFrame(columns=['num_words','num_notes'])
+    self.featureData = pd.DataFrame(columns=['num_words','num_notes'])    
 
   def __del__(self):
     self.conn.close()
 
   def load_data(self, before=None, after=None, exchanges=['NASDAQ','N','A','OTC']):            
+  
     individual_notes = query_db(self.conn, 'notes', ['note_wordcount'], before=before, after=after, exchanges=exchanges)
     
     def aggregator(df):
@@ -46,8 +46,17 @@ class notesCountReader:
     self.featureData = self.load_data(before = params['before'], exchanges= params['exchanges'])
     self.index = self.featureData.index
     
-  def test(self, params):
+  def test(self, params, most_recent=False):
     self.featureData = self.load_data(before = params['before'], after=params['after'], exchanges=params['exchanges'])
+    if most_recent:
+      def max_date(g):
+        g = g.reset_index()
+        g = g.iloc[g['date'].argmax()]
+        g = g.drop('cik')
+        return g
+
+      self.featureData = self.featureData.groupby(level='cik').apply(max_date).reset_index().set_index(['date','cik'])
+    
     self.index = self.featureData.index
     
 
@@ -95,6 +104,7 @@ class notesTextReader:
     self.featureData = TfidfVectorizer(stop_words='english', vocabulary=self.train_vectorizer.vocabulary_).fit_transform(gen_notes())
     # tfidf = TfidfTransformer().fit(self.featureData);
     # self.featureData = tfidf.transform(self.featureData, copy=False)
+        
     self.index = index
 
 
@@ -220,10 +230,61 @@ class financialsReader:
     self.featureData = self.load_data(before=params['before'], exchanges=params['exchanges'])
     self.index = self.featureData.index
     
-  def test(self, params):
-    self.featureData = self.load_data(after=params['after'], before=params['before'], exchanges=params['exchanges'])
+  def test(self, params, most_recent=False):
+    self.featureData = self.load_data(after=params['after'], before=params['before'], exchanges=params['exchanges'])    
+    if most_recent:
+      def max_date(g):
+        g = g.reset_index()
+        g = g.iloc[g['date'].argmax()]
+        g = g.drop('cik')
+        return g
+
+      self.featureData = self.featureData.groupby(level='cik').apply(max_date).reset_index().set_index(['date','cik'])
+
     self.index = self.featureData.index
     
+class dailyReturnsReader:
+  def __init__(self):
+    self.conn = psycopg2.connect("dbname=secdata user=vagrant password=pwd") 
+  def __del__(self):
+    self.conn.close()
+   
+  def load_data(self, before=None, after=None, exchanges=['NASDAQ','N','A','OTC']):
+    def next_trading_price(date, pr): 
+      date0 = date
+      while date <= date0 + np.timedelta64(3,'D'):    
+        
+        try:
+          cur_pr = pr.loc[date]
+          if not pd.isnull(cur_pr):
+            return cur_pr
+          else:
+            date += np.timedelta64(1,'D') 
+        except:
+          date += np.timedelta64(1,'D')
+      return None 
+
+    # Read data, limiting to specified years and exchanges              
+    constraints = ['%s <> \'NaN\''%self.return_field]        
+    tmp = query_db(self.conn, 'financials', [], before=before, after=after, constraints=constraints, exchanges=exchanges)
+    df = pd.DataFrame(columns=['previous_return','three_month_return'], index=tmp.index)
+    for (date,cik) in df.index:
+      base_dir = '../data/edgar/'
+      f = open(base_dir + cik + '/all_daily_prices.pickle','r')
+      pr = pickle.load(f)
+      f.close() 
+
+      pr = pr.iloc[:-2].astype('float')
+      start_pr = next_trading_price(date + np.timedelta64(1,'M'), pr)
+      three_mo_pr = next_trading_price(date + np.timedelta64(4,'M'), pr)
+      df.loc[(date,cik), 'three_month_return'] = 0.25 * (three_mo_pr - start_pr) / start_pr
+      
+      start_pr = next_trading_price(date - np.timedleta64(3,'M'),pr)
+      end_pr = next_trading_price(date,pr)
+      df.loc[(date,cik),'previous_return'] = 0.25 * (end_pr - start_pr) / start_pr
+    return df
+
+
 
 class returnsReader:
   def __init__(self, return_dur='annual'):
@@ -247,8 +308,17 @@ class returnsReader:
     self.featureData = self.load_data(before=params['before'], exchanges=params['exchanges'])
     self.index = self.featureData.index
     
-  def test(self, params):
+  def test(self, params, most_recent=False):
     self.featureData = self.load_data(after=params['after'], before=params['before'], exchanges= params['exchanges'])
+    if most_recent:
+      def max_date(g):
+        g = g.reset_index()
+        g = g.iloc[g['date'].argmax()]
+        g = g.drop('cik')
+        return g
+
+      self.featureData = self.featureData.groupby(level='cik').apply(max_date).reset_index().set_index(['date','cik'])
+    
     self.index = self.featureData.index
         
 
