@@ -3,7 +3,8 @@ import psycopg2
 import os
 import pandas as pd
 import numpy as np
-
+import pickle
+import matplotlib.pyplot as plt
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 def query_db(conn, table, cols, before=None, after=None, constraints=[], exchanges=['NASDAQ','N','A','OTC']):
@@ -243,46 +244,6 @@ class financialsReader:
 
     self.index = self.featureData.index
     
-class dailyReturnsReader:
-  def __init__(self):
-    self.conn = psycopg2.connect("dbname=secdata user=vagrant password=pwd") 
-  def __del__(self):
-    self.conn.close()
-   
-  def load_data(self, before=None, after=None, exchanges=['NASDAQ','N','A','OTC']):
-    def next_trading_price(date, pr): 
-      date0 = date
-      while date <= date0 + np.timedelta64(3,'D'):    
-        
-        try:
-          cur_pr = pr.loc[date]
-          if not pd.isnull(cur_pr):
-            return cur_pr
-          else:
-            date += np.timedelta64(1,'D') 
-        except:
-          date += np.timedelta64(1,'D')
-      return None 
-
-    # Read data, limiting to specified years and exchanges              
-    constraints = ['%s <> \'NaN\''%self.return_field]        
-    tmp = query_db(self.conn, 'financials', [], before=before, after=after, constraints=constraints, exchanges=exchanges)
-    df = pd.DataFrame(columns=['previous_return','three_month_return'], index=tmp.index)
-    for (date,cik) in df.index:
-      base_dir = '../data/edgar/'
-      f = open(base_dir + cik + '/all_daily_prices.pickle','r')
-      pr = pickle.load(f)
-      f.close() 
-
-      pr = pr.iloc[:-2].astype('float')
-      start_pr = next_trading_price(date + np.timedelta64(1,'M'), pr)
-      three_mo_pr = next_trading_price(date + np.timedelta64(4,'M'), pr)
-      df.loc[(date,cik), 'three_month_return'] = 0.25 * (three_mo_pr - start_pr) / start_pr
-      
-      start_pr = next_trading_price(date - np.timedleta64(3,'M'),pr)
-      end_pr = next_trading_price(date,pr)
-      df.loc[(date,cik),'previous_return'] = 0.25 * (end_pr - start_pr) / start_pr
-    return df
 
 
 
@@ -322,11 +283,13 @@ class returnsReader:
     self.index = self.featureData.index
         
 
-  def apply_threshold(self, threshold, criterion):
+  def apply_threshold(self, threshold, criterion, field=None):    
   # Apply a threshold to convert returns in y to binary variable. 
+    if field==None:
+      field = self.return_field
 
     output = pd.Series(index=self.index)
-    rets = self.featureData[self.return_field]
+    rets = self.featureData[field]
     if criterion == 'gt':     
       # Above threshold       
         output.loc[rets > threshold] = 1
@@ -352,7 +315,7 @@ class returnsReader:
           y_out.loc[ret <= q] = 0
           return y_out
 
-        output = self.featureData[self.return_field].groupby(level=['date']).transform(thresh_quant)            
+        output = self.featureData[field].groupby(level=['date']).transform(thresh_quant)            
     elif criterion == 'bottomquant':
       # Bottom quantile within time period
         def thresh_quant(ret):
@@ -362,7 +325,7 @@ class returnsReader:
           y_out.loc[ret <= q] = 1
           return y_out
 
-        output = self.featureData[self.return_field].groupby(level=['date']).transform(thresh_quant)            
+        output = self.featureData[field].groupby(level=['date']).transform(thresh_quant)            
         
     else:
         raise error("Criterion must be one of: 'lt', 'gt', 'in', 'out', 'topquant', 'bottomquant'")
@@ -370,3 +333,76 @@ class returnsReader:
     return output
 
 
+
+class dailyReturnsReader (returnsReader):
+  
+  def time_increment(self, time, delta):
+    # delta = time difference in months
+    new_time = time + np.timedelta64(delta,'M')
+    return pd.to_datetime('%02d %04d' % (new_time.month,new_time.year), '%m %Y')
+  def time_decrement(self, time, delta):
+    # delta = time difference in months
+    new_time = time - np.timedelta64(delta,'M')
+    return pd.to_datetime('%02d %04d' % (new_time.month,new_time.year), '%m %Y')
+
+  def load_data(self, before=None, after=None, exchanges=['NASDAQ','N','A','OTC']):
+
+    def next_trading_price(date, pr): 
+      date0 = date
+      while date <= date0 + np.timedelta64(3,'D'):     
+        try:
+          cur_pr = pr.loc[date]
+          if not pd.isnull(cur_pr):
+            return cur_pr
+          else:
+            date += np.timedelta64(1,'D') 
+        except:
+          date += np.timedelta64(1,'D')
+      return None 
+
+    # Read data, limiting to specified years and exchanges              
+    constraints = ['%s <> \'NaN\''%self.return_field]        
+    tmp = query_db(self.conn, 'financials', [], before=before, after=after, constraints=constraints, exchanges=exchanges)
+    df = pd.DataFrame(columns=['previous_return',self.return_field], index=tmp.index)
+    for (date,cik) in df.index:
+      base_dir = '../data/edgar/'
+      cik_exists = False
+      try:
+        f = open(base_dir + cik + '/all_daily_prices.pickle','r')
+        pr = pickle.load(f)
+        f.close() 
+        cik_exists = True
+      except:
+        print 'No price information for %s' % cik
+
+      if cik_exists:
+        
+        pr = pr.iloc[:-2].astype('float')        
+        start_pr = next_trading_price(self.time_increment(date,1), pr)
+        if self.return_field == 'one_year_return':
+          end_pr = next_trading_price(self.time_increment(date,13), pr)        
+        else:
+          end_pr = next_trading_price(self.time_increment(date,4), pr)        
+        
+
+        if (end_pr == None) or (start_pr == None):
+          df.loc[(date,cik),self.return_field] = float('NaN')
+        else:
+          df.loc[(date,cik), self.return_field] = (end_pr - start_pr) / start_pr
+
+
+        start_pr = next_trading_price(self.time_decrement(date,3),pr)
+        end_pr = next_trading_price(date,pr)
+        if (end_pr == None) or (start_pr == None):
+          df.loc[(date,cik),'previous_return'] = float('NaN')
+        else:
+          df.loc[(date,cik),'previous_return'] = 0.25 * (end_pr - start_pr) / start_pr
+      else:
+        df.loc[(date,cik),self.return_field] = float('NaN')
+        df.loc[(date,cik),'previous_return'] = float('NaN')
+
+    
+    df = df[pd.notnull(df[self.return_field])]#.set_index(['date','cik'])    
+    return df
+
+ 

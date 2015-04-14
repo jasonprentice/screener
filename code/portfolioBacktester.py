@@ -299,9 +299,9 @@ class portfolioBacktester:
 		beta = self.regress(ret[strat], ['Mkt-RF','HML','SMB'])
 
 		print 'alpha = %0.2f' % beta[0]
-		print 'Mkt beta = %0.2f' % beta[1] 
-		print 'HML beta = %0.2f' % beta[2]
-		print 'SMB beta = %0.2f' % beta[3]
+		print 'Market beta = %0.2f' % beta[1] 
+		print 'High-minus-Low P/B beta = %0.2f' % beta[2]
+		print 'Small-minus-Big market cap beta = %0.2f' % beta[3]
 
 		plt.scatter(self.FF['Mkt-RF'], ret[strat] - self.FF['RF'])
 		xmin, xmax = plt.xlim()

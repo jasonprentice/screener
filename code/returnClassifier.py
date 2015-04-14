@@ -89,7 +89,8 @@ class returnPredictor:
     self.financials = loaders.financialsReader()    
     self.notescount = loaders.notesCountReader()
     self.notestext = loaders.notesTextReader()
-    self.returns = loaders.returnsReader(return_dur='quarterly')
+    #self.returns = loaders.returnsReader(return_dur='quarterly')
+    self.returns = loaders.dailyReturnsReader(return_dur='quarterly')
 
     self.rfc = RandomForestClassifier(n_estimators=30,criterion='gini',max_features='auto',max_depth=5)
     self.svc = LinearSVC()
@@ -195,6 +196,7 @@ class returnPredictor:
     sorted_ix = diff.indices[diff.data.argsort()]
     for ind in sorted_ix[:n]:
       print vocab[ind]
+
 
 
   def evaluate(self, threshold,criterion, before=None, after=None, exchanges=[], plot=True):
