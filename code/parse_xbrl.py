@@ -1,4 +1,5 @@
-import xml.etree.ElementTree as ET
+#import xml.etree.ElementTree as ET
+import lxml.etree as ET
 import gzip
 import os
 import re
@@ -133,16 +134,16 @@ class parseXBRL:
         
         tree = ET.parse(unpack(fname))
         root = tree.getroot()
-        for cal_link in root.iterfind('link:calculationLink', namespaces=ns):
+        for cal_link in root.iterfind('{*}calculationLink', namespaces=ns):
             tag_lookup = {}
             rules = {}
-            for locator in cal_link.iterfind('link:loc', namespaces=ns):
+            for locator in cal_link.iterfind('{*}loc', namespaces=ns):
                 tagname = locator.attrib['{'+ns['xlink']+'}href']
                 tagname = tagname[tagname.find('#')+1:]
                 tagname = tagname.replace('_',':')
                 label = locator.attrib['{'+ns['xlink']+'}label']
                 tag_lookup[label] = tagname
-            for arc in cal_link.iterfind('link:calculationArc',namespaces=ns):
+            for arc in cal_link.iterfind('{*}calculationArc',namespaces=ns):
                 from_tag = tag_lookup[arc.attrib['{'+ns['xlink']+'}from']]
                 to_tag = tag_lookup[arc.attrib['{'+ns['xlink']+'}to']]
                 weight = float(arc.attrib['weight'])
@@ -188,21 +189,26 @@ class parseXBRL:
             mo = mo[0]
         self.reportfile = directory + mo + '/' + report_type + '.xml.gz'
         self.calfile = directory + mo + '/' + report_type + '-cal.xml.gz'
-        (self.ns, rev_ns) = extract_namespace(self.reportfile)
+        (self.ns, self.rev_ns) = extract_namespace(self.reportfile)
         self.xbrl_text = ' '.join(gzip.open(self.reportfile).read().split())
         xbrl = gzip.open(self.reportfile)
         self.root = ET.parse(xbrl).getroot()        
-                
-      
+        
     def read_statement(self, cik, year, mo = None, report_type = '10-K'):        
         self.load_xbrl(cik,year,mo,report_type)
-        
+        directory = self.data_dir + str(cik) + '/' + str(year) + '/'
         # Infer contexts        
         self.get_contexts(year)
+        if self.d_context is None and self.i_context is None:
+          return -1
+        elif self.i_context is None:
+          return -2
+        elif self.d_context is None:
+          return -3
 
         def sub_namespace(tag):            
             resolved = re.match('{([^}]*)}', tag).group(1)            
-            return tag.replace('{' + resolved + '}', rev_ns[resolved] + ':')
+            return tag.replace('{' + resolved + '}', self.rev_ns[resolved] + ':')
 
         # Build dict mapping all items listed in financial statement to their values        
         def parse_tag(tag):
@@ -243,10 +249,12 @@ class parseXBRL:
         for item in self.sfp_items + self.soi_items + self.scf_items:
             item_vals[item] = lookup('us-gaap:' + item)
 
-        
-        num_shares = re.findall('<dei:EntityCommonStockSharesOutstanding [^>]*>([^<]*)</dei:EntityCommonStockSharesOutstanding>', self.xbrl_text)[0]
+        try:
+          num_shares = re.findall('<dei:EntityCommonStockSharesOutstanding [^>]*>([^<]*)</dei:EntityCommonStockSharesOutstanding>', self.xbrl_text)[0]
+        except:
+          num_shares = 0
         #num_shares = self.root.find('.//dei:EntityCommonStockSharesOutstanding', namespaces=self.ns).text
-        item_vals['EntityCommonStockSharesOutstanding'] = int(num_shares)
+        item_vals['EntityCommonStockSharesOutstanding'] = int(float(num_shares))
 
         return item_vals
 
@@ -258,32 +266,38 @@ class parseXBRL:
         def find_contexts(items):                                    
             from collections import Counter
             contexts = Counter()
-            for item in items:                   
+            for item in items:                                 
                 rx1 = '<us-gaap:' + item + ' [^\s]* contextRef=[\'\"]([^\'\"]+)[\'\"]'  # If other attributes are between tag and contextRef
-                rx2 = '<us-gaap:' + item + ' contextRef=[\'\"]([^\'\"]+)[\'\"]'     # If contextRef immediately follows tag                
+                rx2 = '<us-gaap:' + item + ' contextRef=[\'\"]([^\'\"]+)[\'\"]'         # If contextRef immediately follows tag                
+                
                 tags = re.findall(rx1, self.xbrl_text)                                                     
                 if not tags:
-                    tags = re.findall(rx2, self.xbrl_text)                                
+                    tags = re.findall(rx2, self.xbrl_text)                                                
                 for tag in tags:                      
                     contexts[tag] += 1
             
-            max_cnt = max(contexts.values())
-            context_list = [context for (context,val) in contexts.iteritems() if val==max_cnt]                        
-            
-            return context_list
+            if not contexts.values():
+              return None
+            else:
+              max_cnt = max(contexts.values())
+              context_list = [context for (context,val) in contexts.iteritems() if val==max_cnt]                        
+              
+              return context_list
         
 
         def resolve_year(datetag, context_list):
             # Disambiguate year from a list of contexts
             tdict = {}            
-            for context in context_list: 
+            
+            for context in context_list:                  
                 incl_ns = True 
                 if 'xbrli' in self.ns:
                   tag = self.root.find('.//xbrli:context[@id=\"' + context + '\"]', namespaces=self.ns)    
                   context_date = tag.find('.//xbrli:'+datetag, namespaces=self.ns).text.strip()
-                else:
-                  tag = self.root.find('.//context[@id=\"' + context + '\"]', namespaces=self.ns)                                                                   
-                  context_date = tag.find('.//'+datetag, namespaces=self.ns).text.strip()
+                else:                                    
+                  tag = self.root.find('.//{*}context[@id=\"' + context + '\"]', namespaces=self.ns)    
+                  
+                  context_date = tag.find('.//{*}'+datetag, namespaces=self.ns).text.strip()
                   
                 tdict[time.strptime(context_date,'%Y-%m-%d')] = context
 
@@ -302,10 +316,16 @@ class parseXBRL:
             # return None
 
         d_contexts = find_contexts(self.soi_items + self.scf_items) # Get duration context from income statement items
-        self.d_context = resolve_year('endDate',d_contexts)       
+        if d_contexts is not None:
+          self.d_context = resolve_year('endDate',d_contexts)       
+        else:
+          self.d_context = None
 
         i_contexts = find_contexts(self.sfp_items) # Get instant context from balance sheet items                
-        self.i_context = resolve_year('instant',i_contexts)
+        if i_contexts is not None:
+          self.i_context = resolve_year('instant',i_contexts)
+        else:
+          self.i_context = None
         
 
 
