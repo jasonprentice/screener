@@ -7,8 +7,8 @@ from returnClassifier import returnPredictor
 
 app = Flask(__name__)
 conn = psycopg2.connect("dbname=secdata user=vagrant password=pwd")
-pred_pos = returnPredictor(pre_pca=False)
-pred_neg = returnPredictor(pre_pca=False)
+pred_pos = returnPredictor()
+pred_neg = returnPredictor()
 
 @app.route('/')
 def main_site():
@@ -194,14 +194,12 @@ def lookup_cik(cik):
 # def screener():
 
 
-if __name__ == '__main__':    	
-	pred_pos.load_data(['2010','2011','2012','2013'])
-	pred_neg.load_data(['2010','2011','2012','2013'])
-	pred_pos.train(50,'topquant')
-	pred_neg.train(-0.2,'lt')
-	pred_pos.load_data(['2014'])
-	pred_neg.load_data(['2014'])
-	app.run('0.0.0.0',debug=True)
+if __name__ == '__main__':    		
+	pred_pos.train(50,'topquant', datestr='12 2013', exchanges=['NASDAQ','N','A','OTC'])
+	pred_neg.train(-0.05,'lt', datestr='12 2013', exchanges=['NASDAQ','N','A','OTC'])
+	pred_pos.evaluate(50,'topquant', after='01 2014', exchanges=['NASDAQ','N','A','OTC'])
+	pred_neg.evaluate(-0.05,'lt', after='01 2014', exchanges=['NASDAQ','N','A','OTC'])
+	app.run('0.0.0.0',debug=False)
 	conn.close()
 
 

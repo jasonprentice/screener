@@ -123,7 +123,7 @@ class returnPredictor:
 
 
 
-  def train(self, threshold, criterion, datestr=None, exchanges=[], model='values'):
+  def train(self, threshold, criterion, datestr=None, exchanges=['NASDAQ','N','A','OTC'], model='values'):
     # Train classifier: threshold, criterion - see apply_threshold() below
     #                   if plot=True, chart most important features
 
@@ -145,7 +145,8 @@ class returnPredictor:
       # sys.stdout.flush()
       self.returns.train(params)
       index = index.intersection(self.returns.index)
-          
+
+      #index = index[self.returns.featureData]          
       X = pd.concat([self.financials.featureData.reindex(index), self.notescount.featureData.reindex(index)], axis=1)
       
       if self.model != 'values':
@@ -199,7 +200,7 @@ class returnPredictor:
 
 
 
-  def evaluate(self, threshold,criterion, before=None, after=None, exchanges=[], plot=True):
+  def evaluate(self, threshold,criterion, before=None, after=None, exchanges=['NASDAQ','N','A','OTC'], plot=False):
     # Evaluate performance. If plot=True, display ROC curve and list top-scoring companies with their actual returns.
     
     if (before or after) and exchanges:
@@ -222,7 +223,7 @@ class returnPredictor:
       self.returns.test(params, most_recent=most_recent)
       index = index.intersection(self.returns.index)
       
-
+      
       X = pd.concat([self.financials.featureData.reindex(index), self.notescount.featureData.reindex(index)], axis=1)
      
       if self.model != 'values':
@@ -303,7 +304,6 @@ class returnPredictor:
     #          print "%(ticker)5s  | %(p)4.2f  |      %(ret)6.2f       | %(name)s" % {'ticker':item[0],'p':float(item[1]),'ret':item[2],'name':item[3]}
             
 
-
   
   def feature_stats(self, feature_name):
     # Summary stats of the feature feature_name
@@ -341,6 +341,16 @@ class returnPredictor:
     w = pd.Series(p.ravel(), index=self.test_index)
       
     return w
+
+  def get_score(self, cik):
+    w = self.apply_model().to_frame('w').reset_index('date')    
+    
+    try:       
+      score = w.loc[cik,'w']
+    except:
+      raise ValueError('CIK %s not in test set' % cik)
+
+    return score
 
   def recommend(self, threshold, criterion, n=10, avoid=False):
     # List top n stocks and their scores

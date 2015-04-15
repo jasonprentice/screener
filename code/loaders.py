@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 import pickle
 import matplotlib.pyplot as plt
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer
 
 def query_db(conn, table, cols, before=None, after=None, constraints=[], exchanges=['NASDAQ','N','A','OTC']):
   direction = {'before': '<', 'after': '>'} 
@@ -26,9 +26,32 @@ def query_db(conn, table, cols, before=None, after=None, constraints=[], exchang
   data = pd.read_sql(sqlstring, conn, index_col = ['date','cik'], parse_dates=['date'])        
   return data
 
+def query_pickle(conn, pickle_file, before=None, after=None, exchanges=['NASDAQ','N','A','OTC']):
+  if before:
+    t0 = pd.to_datetime(before, '%m %Y')
+  if after:
+    t1 = pd.to_datetime(after, '%m %Y')
+
+  f = open(pickle_file,'r')
+  df = pickle.load(f)
+  f.close()
+
+  # Find CIKs matching exchanges
+  xchng_string = '(exchange=' + ' OR exchange='.join(["\'%s\'"%x for x in exchanges]) + ')'  
+  cons = [xchng_string, 'cik IS NOT NULL']
+  where_string = ' AND '.join(cons)       
+  sqlstring = "SELECT cik FROM companies WHERE %s;" % (where_string)  
+  
+  data = pd.read_sql(sqlstring, conn, index_col = ['cik'])
+
+  sub_index = [(date, cik) for (date,cik) in df.index if (date > after and date < before and cik in data.index)]
+  return df.reindex(sub_index)
+
 
 class notesCountReader:
-  def __init__(self):
+  def __init__(self, source='db'):
+    self.source = source
+    self.pickle_file = '../data/pickles/notes_count.pickle'
     self.conn = psycopg2.connect("dbname=secdata user=vagrant password=pwd")    
     self.featureData = pd.DataFrame(columns=['num_words','num_notes'])    
 
@@ -36,8 +59,10 @@ class notesCountReader:
     self.conn.close()
 
   def load_data(self, before=None, after=None, exchanges=['NASDAQ','N','A','OTC']):            
-  
-    individual_notes = query_db(self.conn, 'notes', ['note_wordcount'], before=before, after=after, exchanges=exchanges)
+    if self.source == 'db':
+      individual_notes = query_db(self.conn, 'notes', ['note_wordcount'], before=before, after=after, exchanges=exchanges)
+    elif self.source == 'pickle':
+      individual_notes = query_pickle(self.conn, self.pickle_file, before=before, after=after, exchanges=exchanges)
     
     def aggregator(df):
       return pd.Series([df.sum(), df.shape[0]], index=['num_words','num_notes'])
@@ -62,17 +87,19 @@ class notesCountReader:
     
 
 class notesTextReader:
-  def __init__(self):
+  def __init__(self, source='db'):
+    self.source = source
+    self.pickle_file = '../data/pickles/notes_text.pickle'
     self.conn = psycopg2.connect("dbname=secdata user=vagrant password=pwd")
-    self.train_vectorizer = TfidfVectorizer(stop_words='english', min_df=3, ngram_range=(3,3))
+    self.train_vectorizer = CountVectorizer(stop_words='english', min_df=3, ngram_range=(3,3))
                                      
     self.featureData = pd.DataFrame()
 
   def __del__(self):
     self.conn.close()
 
-  def load_data(self, index):
-   
+  def load_data(self, index, vocabulary=None):
+    
     base_dir = '../data/edgar'       
     def gen_notes():
       for tup in index:
@@ -111,7 +138,8 @@ class notesTextReader:
 
 class financialsReader:
 
-  def __init__(self):        
+  def __init__(self, source='db'):        
+    self.source = source
     self.features = {}
     self.featureData = pd.DataFrame()
     
@@ -248,7 +276,9 @@ class financialsReader:
 
 
 class returnsReader:
-  def __init__(self, return_dur='annual'):
+  def __init__(self, return_dur='annual', source='db'):
+    self.source = source
+
     if return_dur=='annual':
       self.return_field = 'one_year_return'
     elif return_dur=='quarterly':
@@ -261,10 +291,13 @@ class returnsReader:
 
   def load_data(self, before=None, after=None, exchanges=['NASDAQ','N','A','OTC']):
     # Read data, limiting to specified years and exchanges              
-    constraints = ['%s <> \'NaN\''%self.return_field]    
-    cols = [self.return_field]
-    return query_db(self.conn, 'financials', cols, before=before, after=after, constraints=constraints, exchanges=exchanges)
-    
+    if self.source == 'db':
+      constraints = ['%s <> \'NaN\''%self.return_field]    
+      cols = [self.return_field]
+      return query_db(self.conn, 'financials', cols, before=before, after=after, constraints=constraints, exchanges=exchanges)
+    elif self.source == 'pickle':
+      return query_pickle(self.conn, self.pickle_file, before=before, after=after, constraints=constraints, exchanges=exchanges)
+
   def train(self, params):    
     self.featureData = self.load_data(before=params['before'], exchanges=params['exchanges'])
     self.index = self.featureData.index
@@ -348,17 +381,10 @@ class dailyReturnsReader (returnsReader):
   def load_data(self, before=None, after=None, exchanges=['NASDAQ','N','A','OTC']):
 
     def next_trading_price(date, pr): 
-      date0 = date
-      while date <= date0 + np.timedelta64(3,'D'):     
-        try:
-          cur_pr = pr.loc[date]
-          if not pd.isnull(cur_pr):
-            return cur_pr
-          else:
-            date += np.timedelta64(1,'D') 
-        except:
-          date += np.timedelta64(1,'D')
-      return None 
+      try:
+        return pr.loc[date]
+      except:
+        return None      
 
     # Read data, limiting to specified years and exchanges              
     constraints = ['%s <> \'NaN\''%self.return_field]        
@@ -369,7 +395,7 @@ class dailyReturnsReader (returnsReader):
       cik_exists = False
       try:
         f = open(base_dir + cik + '/all_daily_prices.pickle','r')
-        pr = pickle.load(f)
+        pr = pickle.load(f)        
         f.close() 
         cik_exists = True
       except:
@@ -378,6 +404,7 @@ class dailyReturnsReader (returnsReader):
       if cik_exists:
         
         pr = pr.iloc[:-2].astype('float')        
+        pr = pr.fillna(method='backfill',limit=3)
         start_pr = next_trading_price(self.time_increment(date,1), pr)
         if self.return_field == 'one_year_return':
           end_pr = next_trading_price(self.time_increment(date,13), pr)        
