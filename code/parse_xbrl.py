@@ -198,13 +198,7 @@ class parseXBRL:
         self.load_xbrl(cik,year,mo,report_type)
         directory = self.data_dir + str(cik) + '/' + str(year) + '/'
         # Infer contexts        
-        self.get_contexts(year)
-        if self.d_context is None and self.i_context is None:
-          return -1
-        elif self.i_context is None:
-          return -2
-        elif self.d_context is None:
-          return -3
+        self.get_contexts(year)        
 
         def sub_namespace(tag):            
             resolved = re.match('{([^}]*)}', tag).group(1)            
@@ -267,16 +261,19 @@ class parseXBRL:
             from collections import Counter
             contexts = Counter()
             for item in items:                                 
-                rx1 = '<us-gaap:' + item + ' [^\s]* contextRef=[\'\"]([^\'\"]+)[\'\"]'  # If other attributes are between tag and contextRef
+                rx1 = '<us-gaap:' + item + ' [^>]* contextRef=[\'\"]([^\'\"]+)[\'\"]'  # If other attributes are between tag and contextRef
                 rx2 = '<us-gaap:' + item + ' contextRef=[\'\"]([^\'\"]+)[\'\"]'         # If contextRef immediately follows tag                
                 
                 tags = re.findall(rx1, self.xbrl_text)                                                     
+                              
                 if not tags:
                     tags = re.findall(rx2, self.xbrl_text)                                                
+                
                 for tag in tags:                      
                     contexts[tag] += 1
             
-            if not contexts.values():
+
+            if not contexts.values():              
               return None
             else:
               max_cnt = max(contexts.values())

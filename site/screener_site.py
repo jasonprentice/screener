@@ -1,9 +1,9 @@
-from flask import Flask, render_template, redirect, url_for, request
+from flask import Flask, render_template, redirect, url_for, request, jsonify
 import pandas as pd
 import psycopg2
 import numpy as np
 from returnClassifier import returnPredictor
-
+from io import StringIO
 
 app = Flask(__name__)
 conn = psycopg2.connect("dbname=secdata user=vagrant password=pwd")
@@ -45,6 +45,19 @@ def main_site_filtered(filter_tag, page=0):
 	# cur.close()
 	headings = ['Name', 'Ticker', 'CIK']
 	return render_template('list_by_exchange.html', filter=filter_tag, rows=rows[min_row:max_row], headings=headings, minpage=minpage, maxpage=maxpage, numpages=numpages, curpage=int(page))
+
+@app.route('/get_chart.json')
+def get_chart():
+	X = np.arange(10)
+	Y = np.random.randn(len(X))
+	values = [{'x':x, 'y':y} for (x,y) in zip(X,Y)]
+	return jsonify([('result', [
+		                 {'values':values, 'key':'Random numbers', 'color':'#009999'}
+		                       ])])
+
+@app.route('/chart/')
+def chart():
+	return render_template('chart_ui.html')
 
 @app.route('/screener/')
 def screener():
@@ -195,11 +208,11 @@ def lookup_cik(cik):
 
 
 if __name__ == '__main__':    		
-	pred_pos.train(50,'topquant', datestr='12 2013', exchanges=['NASDAQ','N','A','OTC'])
-	pred_neg.train(-0.05,'lt', datestr='12 2013', exchanges=['NASDAQ','N','A','OTC'])
-	pred_pos.evaluate(50,'topquant', after='01 2014', exchanges=['NASDAQ','N','A','OTC'])
-	pred_neg.evaluate(-0.05,'lt', after='01 2014', exchanges=['NASDAQ','N','A','OTC'])
-	app.run('0.0.0.0',debug=False)
+	# pred_pos.train(50,'topquant', datestr='12 2013', exchanges=['NASDAQ','N','A','OTC'])
+	# pred_neg.train(-0.05,'lt', datestr='12 2013', exchanges=['NASDAQ','N','A','OTC'])
+	# pred_pos.evaluate(50,'topquant', after='01 2014', exchanges=['NASDAQ','N','A','OTC'])
+	# pred_neg.evaluate(-0.05,'lt', after='01 2014', exchanges=['NASDAQ','N','A','OTC'])
+	app.run('0.0.0.0',debug=True)
 	conn.close()
 
 
