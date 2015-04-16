@@ -494,7 +494,12 @@ class returnPredictor:
 #        plt.xticks(ind+width/2, [name for (name,f) in feature_values],rotation=90)
 
 
-  
+  def save_model(self, file):    
+      w = self.apply_model().to_frame('w').reset_index('date')    
+      d = {'scores': w, 'svc':self.svc, 'rfc':self.rfc, 'final_svc':self.final_svc}
+      f = open(file,'w')
+      pickle.dump(d,f)
+      f.close()
   
   def mean_std(self, X, ret):
       score = self.clf.predict_proba(X)

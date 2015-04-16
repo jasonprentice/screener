@@ -46,9 +46,11 @@ def main_site_filtered(filter_tag, page=0):
 	headings = ['Name', 'Ticker', 'CIK']
 	return render_template('list_by_exchange.html', filter=filter_tag, rows=rows[min_row:max_row], headings=headings, minpage=minpage, maxpage=maxpage, numpages=numpages, curpage=int(page))
 
-@app.route('/get_chart.json')
+@app.route('/get_chart', methods=['GET'])
 def get_chart():
-	X = np.arange(10)
+	date = request.args['date']
+	t = pd.date_range(date,'2015-04-16', freq='M')	
+	X = map(lambda d: '%d-%02d-%02d' %(d.year, d.month, d.day), t)	
 	Y = np.random.randn(len(X))
 	values = [{'x':x, 'y':y} for (x,y) in zip(X,Y)]
 	return jsonify([('result', [

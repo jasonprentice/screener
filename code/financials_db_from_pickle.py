@@ -7,7 +7,7 @@ from math import isnan
 report_type = '10-Q'
 base_dir = '../data/edgar/'
 stock_price_pickle_file = 'stock_price.pickle'
-financials_pickle = 'edgar_dataframe.pickle'
+financials_pickle = '../data/pickles/edgar_dataframe_filled_v2.pickle'
 
 f = open(financials_pickle,'r')
 edgar_df = pickle.load(f)

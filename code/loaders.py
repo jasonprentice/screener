@@ -390,6 +390,9 @@ class dailyReturnsReader (returnsReader):
     constraints = ['%s <> \'NaN\''%self.return_field]        
     tmp = query_db(self.conn, 'financials', [], before=before, after=after, constraints=constraints, exchanges=exchanges)
     df = pd.DataFrame(columns=['previous_return',self.return_field], index=tmp.index)
+    f = open('../data/pickles/prices_all_stocks.pickle','r')
+    all_pr = pickle.load(f)
+    f.close()
     for (date,cik) in df.index:
       base_dir = '../data/edgar/'
       cik_exists = False
@@ -403,8 +406,8 @@ class dailyReturnsReader (returnsReader):
 
       if cik_exists:
         
-        pr = pr.iloc[:-2].astype('float')        
-        pr = pr.fillna(method='backfill',limit=3)
+        # pr = pr.iloc[:-2].astype('float')        
+        # pr = pr.fillna(method='backfill',limit=3)
         start_pr = next_trading_price(self.time_increment(date,1), pr)
         if self.return_field == 'one_year_return':
           end_pr = next_trading_price(self.time_increment(date,13), pr)        
