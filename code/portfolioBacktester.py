@@ -8,6 +8,7 @@ from collections import namedtuple
 import matplotlib.pyplot as plt
 from scipy.stats import linregress
 import sys
+import time
 
 def next_trading_price(date, pr):	
 	date0 = date
@@ -35,14 +36,18 @@ def tickers_to_ciks(tickers):
 Event = namedtuple('Event', ['time','ciks','data','type'])
 
 class Portfolio:
-	def __init__(self, ciks=[], weights=[], date=None):		
+	def __init__(self, ciks=[], weights=[], date=None, universe=None):		
 		self.max_time = pd.to_datetime('12 2015','%m %Y')
 		self.min_time = pd.to_datetime('01 2009','%m %Y')
 		self.index = pd.date_range(self.min_time, self.max_time, freq='D')
+		
+		self.universe = universe
+		if universe is not None:
+			self.universe = self.universe.reindex(self.index)
 
-		self.all_prices = pd.DataFrame(columns=['cash'] + ciks, index=self.index)
+		self.all_prices = pd.DataFrame(columns=['cash'], index=self.index)
 		self.all_prices['cash'] = 1
-		self.num_shares = pd.Series(0,index=['cash'] + ciks)		
+		self.num_shares = pd.Series(0,index=['cash']+ciks)		
 
 		self.event_queue = []
 		self.event_handlers = {'liquidate': self.liquidation_handler, 
@@ -57,10 +62,10 @@ class Portfolio:
 
 	def construct(self, ciks, weights, date, value=1):
 		for (cik, weight) in zip(ciks,weights):							
-			pr = self.load_stock(cik)			
+			pr = self.load_stock(cik)				
 			cur_price = next_trading_price(date, pr)
 
-			if cur_price:
+			if cur_price:				
 				self.num_shares.loc[cik] = value * weight / cur_price
 			else:
 				self.num_shares.loc[cik] = 0
@@ -74,21 +79,35 @@ class Portfolio:
 		self.inception_date = date
 		
 		return self
+	
+	def reset(self,value=1):
+		self.num_shares = pd.Series(0,index=['cash'])
+		self.num_shares.loc['cash'] = value
+		self.last_trade_date = self.inception_date
+
+		self.all_prices = pd.DataFrame(columns=['cash'], index=self.index)
+		self.all_prices['cash'] = 1
+		self.value_ = self.all_prices.dot(self.num_shares)
+		self.event_queue = []
 
 	def load_stock(self, cik):		
-		try: 
+		try: 			
 			return self.all_prices[cik]
 		except:			
 			#try:
-			base_dir = '../data/edgar/'
-			f = open(base_dir + cik + '/all_daily_prices.pickle','r')
-			pr = pickle.load(f)
-			f.close()	
+			if self.universe is not None:
+				pr = self.universe[cik]
 
-			pr = pr.iloc[:-2].astype('float')
+			else:
+				base_dir = '../data/edgar/'
+				f = open(base_dir + cik + '/all_daily_prices.pickle','r')
+				pr = pickle.load(f)
+				f.close()	
+
+				pr = pr.iloc[:-2].astype('float')
 
 			# On latest date for which we have a price, assume position gets liquidated at that price			
-			heapq.heappush(self.event_queue, Event(time=pr.index[0], ciks=[cik], data=None, type='liquidate'))
+			heapq.heappush(self.event_queue, Event(time=pr.last_valid_index(), ciks=[cik], data=None, type='liquidate'))
 			# except:				
 			# 	pr = pd.Series(float('NaN'),index=self.index)
 				#raise ValueError('No price information for CIK %s' % cik)	
@@ -101,10 +120,11 @@ class Portfolio:
 		return self.value_.loc[np.logical_and(self.value_.index >= self.inception_date, self.value_.index <= self.last_trade_date)]
 
 	def liquidation_handler(self, event):
+
 		# Sell all shares of a stock (or cover short position), then reinvest proceeds into remaining holdings
 		date = event.time
 		cik = event.ciks[0]
-
+		print 'liquidation: %s' % cik
 		if self.num_shares[cik] != 0:
 			V = next_trading_price(date,self.value_)	
 			p = next_trading_price(date,self.all_prices[cik])
@@ -117,6 +137,7 @@ class Portfolio:
 	def rebalance_handler(self, event):
 		# Reweight holdings without net buying/selling
 		date = event.time
+		date = pd.to_datetime('%d-%02d-%02d' % (date.year, date.month, date.day), '%Y-%m-%d')
 		ciks = event.ciks
 		weights = event.data
 
@@ -128,6 +149,7 @@ class Portfolio:
 		self.num_shares = pd.Series(0, index=self.num_shares.index)
 		for (cik, weight) in zip(ciks,weights):	
 			pr = self.load_stock(cik)
+
 			cur_price = next_trading_price(date, pr)			
 			if cur_price:				
 				# print cur_price
@@ -137,7 +159,9 @@ class Portfolio:
 			
 		# if (tot > 0 and V <= 0) or (tot < 0 and V >= 0) or (tot==0 and V != 0):
 		# 	raise ValueError('Rebalancing may not change sign of net portfolio value!')	
+		
 		self.num_shares = self.num_shares / tot
+		#print self.num_shares
 		
 	def sell_handler(self,event):		
 		date = event.time
@@ -218,12 +242,15 @@ class Portfolio:
 
 class portfolioBacktester:
 	def __init__(self, inception_date):
-		self.inception_date = inception_date
+		self.inception_date = inception_date		
 		self.max_time = pd.to_datetime('12 2015','%m %Y')
 		self.strategies = {}
 		self.FF = self.read_FF()
 		self.FF = self.FF.loc[self.FF.index >= self.inception_date]
 
+		f = open('../data/pickles/prices_all_stocks_SPY.pickle')
+		self.all_prices = pickle.load(f)
+		f.close()
 
 	def read_FF(self):
 	    fname = '../data/F-F_Research_Data_Factors.txt'
@@ -249,7 +276,7 @@ class portfolioBacktester:
 		if weights:
 			norm = abs(sum(weights))
 			weights = map(lambda w: w/norm, weights)
-		self.strategies[name] = Portfolio(ciks, weights, self.inception_date)
+		self.strategies[name] = Portfolio(ciks, weights, self.inception_date, universe = self.all_prices)
 
 	def values(self, begin=None, end=None):
 		if begin==None:

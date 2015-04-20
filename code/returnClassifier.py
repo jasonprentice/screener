@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import sys
+import pickle
 
 from scipy.stats import rankdata
 
@@ -131,18 +132,18 @@ class returnPredictor:
     if datestr and exchanges:
       params = {'before': datestr, 'exchanges': exchanges}
       
-      # print "Reading financial values..."
-      # sys.stdout.flush()
+      print "Reading financial values..."
+      sys.stdout.flush()
       self.financials.train(params)
       index = self.financials.index
 
-      # print "Reading notes wordcount..."
-      # sys.stdout.flush()
+      print "Reading notes wordcount..."
+      sys.stdout.flush()
       self.notescount.train(params)
       index = index.intersection(self.notescount.index)
 
-      # print "Reading returns..."
-      # sys.stdout.flush()
+      print "Reading returns..."
+      sys.stdout.flush()
       self.returns.train(params)
       index = index.intersection(self.returns.index)
 
@@ -209,7 +210,7 @@ class returnPredictor:
      
       # print "Reading financial values..."
       # sys.stdout.flush()
-      most_recent=True
+      most_recent=False
       self.financials.test(params,most_recent=most_recent)
       index = self.financials.index
       
@@ -265,6 +266,8 @@ class returnPredictor:
     fpr,tpr,thresh = roc_curve(self.test_y, w)
     roc_auc = auc(fpr,tpr)
     if plot:
+      # plt.scatter(w, self.returns.featureData.reindex(self.test_index).values)
+      # plt.show()
       self.show_ROC(fpr,tpr,thresh,roc_auc)
     return roc_auc
 
@@ -366,7 +369,7 @@ class returnPredictor:
       # scores = tmp.loc[tmp['w'] > 0.75*max_score, 'w']
       # top_ciks = tmp.loc[tmp['w']>0.75*max_score, 'cik']
 
-      tmp = tmp.sort(columns=['w'],ascending=False,)
+      tmp = tmp.sort(columns=['w'],ascending=False)
       
 
       if avoid:

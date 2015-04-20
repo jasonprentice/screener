@@ -10,8 +10,8 @@
 
 <ul class="nav nav-tabs">
   <li role="presentation" class="active"><a href="#">All Companies</a></li>
-  <li role="presentation"><a href="/screener/">Recommended Companies</a></li>  
-  <li role="presentation"><a href="/chart/">Chart</a></li>  
+  <!-- <li role="presentation"><a href="/screener/">Recommended Companies</a></li>  -->
+  <li role="presentation"><a href="/chart/"> Recommended Companies </a></li>  
 </ul>
 
 <div class="container">
@@ -27,7 +27,7 @@
 		  <li role="presentation" {% if filter == 'otc' %}class="active"{% endif %}><a href="/screener"> SCREEN </a></li> 
 		 -->
 
-		  <form class="navbar-form navbar-left" role="search" method='POST' action='/companies/search'>
+		  <form class="navbar-form navbar-left" role="search" method='GET' action='/companies/search'>
 	        <div class="form-group">
 	          <input type="text" class="form-control" name="ticker" placeholder="Ticker">
 	        </div>

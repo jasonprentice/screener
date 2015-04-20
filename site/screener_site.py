@@ -3,7 +3,11 @@ import pandas as pd
 import psycopg2
 import numpy as np
 from returnClassifier import returnPredictor
+import portfolioBacktester as ptf
 from io import StringIO
+import pickle
+import sys
+import time
 
 app = Flask(__name__)
 conn = psycopg2.connect("dbname=secdata user=vagrant password=pwd")
@@ -46,16 +50,67 @@ def main_site_filtered(filter_tag, page=0):
 	headings = ['Name', 'Ticker', 'CIK']
 	return render_template('list_by_exchange.html', filter=filter_tag, rows=rows[min_row:max_row], headings=headings, minpage=minpage, maxpage=maxpage, numpages=numpages, curpage=int(page))
 
-@app.route('/get_chart', methods=['GET'])
+@app.route('/get_chart')
 def get_chart():
 	date = request.args['date']
-	t = pd.date_range(date,'2015-04-16', freq='M')	
-	X = map(lambda d: '%d-%02d-%02d' %(d.year, d.month, d.day), t)	
-	Y = np.random.randn(len(X))
-	values = [{'x':x, 'y':y} for (x,y) in zip(X,Y)]
+	n = int(request.args['n'])
+	rebalance_freq = int(request.args['rebalance'])
+#	ciks = ptf.tickers_to_ciks([ticker])
+	
+	end_date = pd.to_datetime('2015-01-01','%Y-%m-%d')
+	max_date = pd.to_datetime('2014-06-01','%Y-%m-%d')
+	
+	rebalance_date = pd.to_datetime(date, '%Y-%m-%d')
+	
+	portfolio.strategies['S&P 500'].rebalance(['SPY'],[1.0], date=rebalance_date)
+	while rebalance_date < max_date:		
+		(ciks,weights) = top_scorers(rebalance_date, n=n)				
+		(bottom_ciks,bottom_weights) = bottom_scorers(rebalance_date, n=n)			
+		print bottom_weights	
+		portfolio.strategies['Top scorers'].rebalance(ciks + bottom_ciks, [-0.5]*len(ciks) + [1.0]*len(bottom_ciks), date=rebalance_date)		
+		if rebalance_freq > 0:
+			rebalance_date += np.timedelta64(rebalance_freq,'M')
+		else:
+			break
+	
+	v = portfolio.values(begin=inception_date,end=end_date)	
+	
+	portfolio.strategies['Top scorers'].reset()
+	portfolio.strategies['S&P 500'].reset()
+
+	v = v.fillna(method='ffill')
+	
+	t = v.index
+	#t = pd.date_range(date,'2015-04-16', freq='M')	
+	X = map(lambda d: '%d-%02d-%02d' %(d.year, d.month, d.day), t)
+	Y = v['Top scorers'].values
+	#Y = np.random.randn(len(X))
+
+	conames = []
+	tickers = []
+
+	t0 = time.clock()
+	for cik in ciks:
+		db = pd.read_sql("SELECT name,ticker FROM companies WHERE cik=%s;", conn, params=(cik,))	
+		coname = db.loc[0,'name']
+		ticker = db.loc[0,'ticker']
+		coname = coname.split('Common')[0].strip()
+		if coname[-1] == '-':
+			coname = coname[:-1]
+		conames.append(coname)
+		tickers.append(ticker)
+	print '%s s to get company info' % (time.clock() - t0)
+	sys.stdout.flush()
+
+	values = [{'x':x, 'y':y} for (x,y) in zip(X,Y) if pd.notnull(y)]
+	spy = [{'x':x, 'y':y} for (x,y) in zip(X, v['S&P 500'].values) if pd.notnull(y)]
+	companies = [{'name':name, 'ticker':ticker, 'score':weight} for (name,ticker, weight) in zip(conames,tickers, weights)]
 	return jsonify([('result', [
-		                 {'values':values, 'key':'Random numbers', 'color':'#009999'}
-		                       ])])
+		                 {'values':values, 'key':'Top scorers', 'color':'#009999'},
+		                 {'values':spy, 'key':'S&P 500', 'color':'#990000'}
+		                       ]),
+	                ('companies', companies)])
+	                
 
 @app.route('/chart/')
 def chart():
@@ -86,9 +141,9 @@ def screener():
 	return render_template('screener_template.html', rec_list=rec_list, avoid_list=avoid_list)
 
 
-@app.route('/companies/search', methods=['POST'])
+@app.route('/companies/search')
 def lookup_by_ticker():		
-	ticker = request.form['ticker']
+	ticker = request.args['ticker']
 	cik = pd.read_sql("SELECT cik FROM companies WHERE ticker=%s;", conn, params=(ticker,))
 	cik = cik.loc[0,'cik']
 	return redirect(url_for('lookup_cik',cik=cik))		
@@ -209,11 +264,85 @@ def lookup_cik(cik):
 # def screener():
 
 
+def load_scores():
+	yrs = range(2010,2015)
+	mos = range(1,13)
+	yrmos = [('%d'%yr,'%02d'%mo) for yr in yrs for mo in mos]
+
+	df = pd.DataFrame(columns=['cik','date','w'])	
+	for (yr,mo) in yrmos:    
+	    fname = '../data/pickles/%s/%s/negative_model.pickle' % (yr,mo)
+	    ok = False
+	    try:
+	        f = open(fname,'r')
+	        d = pickle.load(f)
+	        f.close()
+	        ok = True
+	    except:
+	        pass
+	    if ok:	    	
+	        df = df.append(d['scores'].reset_index(), ignore_index=True)
+	#all_scores = df.reset_index().groupby(['cik','date']).apply(lambda g: g['w'].mean())
+	
+	all_scores = df.groupby(['cik','date']).mean()	
+	#all_scores = all_scores.to_frame('w').reset_index()
+	all_scores = all_scores.reset_index()
+	all_scores = all_scores.sort(columns=['date'])
+
+	return all_scores
+
+def score_lookup_table(all_scores, window=4):
+	yrs = range(2010,2015)
+	mos = range(1,13)
+	dates = ['%d-%02d' % (yr,mo) for yr in yrs for mo in mos]	
+	dicts_table = [dict() for d in dates]
+	
+	for index,row in all_scores.iterrows():										
+		ix = dates.index('%d-%02d' % (row.date.year, row.date.month))			
+		for i in range(1,window):						
+			try:
+				dicts_table[ix + i][row.cik] = row.w															
+			except IndexError:
+				break	
+
+	unpack_and_sort = lambda d: sorted(d.iteritems(), key=lambda (_,w): w, reverse=True)		
+	tuples_table = map(unpack_and_sort, dicts_table)	
+	lookup_table = dict(zip(dates, tuples_table))
+
+	return lookup_table
+
+
+
+def top_scorers(date, n=30):	
+	datestr = '%d-%02d' % (date.year, date.month)
+	return zip(*score_lookup[datestr][:n])
+
+def bottom_scorers(date, n=30):
+	datestr = '%d-%02d' % (date.year, date.month)
+	return zip(*score_lookup[datestr][-n:])	
+	#in_range = all_scores[(all_scores.date > after) & (all_scores.date < before)] 
+	# def max_date(g):
+	# 	g = g.reset_index()
+	# 	g = g.iloc[g['date'].argmax()]
+	# 	g = g.drop('cik')
+	# 	return g
+	# #in_range = in_range.groupby('cik').apply(max_date).reset_index()
+	# in_range = in_range.groupby('cik').mean().reset_index()
+	#in_range = in_range.sort(columns=['w'],ascending=False)
+	
+	#return (in_range.iloc[:n].cik.values, in_range.iloc[:n].w.values)
+
+
 if __name__ == '__main__':    		
 	# pred_pos.train(50,'topquant', datestr='12 2013', exchanges=['NASDAQ','N','A','OTC'])
 	# pred_neg.train(-0.05,'lt', datestr='12 2013', exchanges=['NASDAQ','N','A','OTC'])
 	# pred_pos.evaluate(50,'topquant', after='01 2014', exchanges=['NASDAQ','N','A','OTC'])
 	# pred_neg.evaluate(-0.05,'lt', after='01 2014', exchanges=['NASDAQ','N','A','OTC'])
+	score_lookup = score_lookup_table(load_scores())
+	inception_date = pd.to_datetime('2010-09-01','%Y-%m-%d')
+	portfolio = ptf.portfolioBacktester(inception_date)	
+	portfolio.create_strategy('Top scorers')
+	portfolio.create_strategy('S&P 500')
 	app.run('0.0.0.0',debug=True)
 	conn.close()
 

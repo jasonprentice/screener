@@ -393,33 +393,27 @@ class dailyReturnsReader (returnsReader):
     f = open('../data/pickles/prices_all_stocks.pickle','r')
     all_pr = pickle.load(f)
     f.close()
-    for (date,cik) in df.index:
-      base_dir = '../data/edgar/'
+    for (date,cik) in df.index:    
       cik_exists = False
       try:
-        f = open(base_dir + cik + '/all_daily_prices.pickle','r')
-        pr = pickle.load(f)        
-        f.close() 
+        pr = all_pr[cik]
         cik_exists = True
       except:
-        print 'No price information for %s' % cik
+        pass
+#        print 'No price information for %s' % cik
 
       if cik_exists:
-        
-        # pr = pr.iloc[:-2].astype('float')        
-        # pr = pr.fillna(method='backfill',limit=3)
+                
         start_pr = next_trading_price(self.time_increment(date,1), pr)
         if self.return_field == 'one_year_return':
           end_pr = next_trading_price(self.time_increment(date,13), pr)        
         else:
-          end_pr = next_trading_price(self.time_increment(date,4), pr)        
-        
+          end_pr = next_trading_price(self.time_increment(date,4), pr)                
 
         if (end_pr == None) or (start_pr == None):
           df.loc[(date,cik),self.return_field] = float('NaN')
         else:
           df.loc[(date,cik), self.return_field] = (end_pr - start_pr) / start_pr
-
 
         start_pr = next_trading_price(self.time_decrement(date,3),pr)
         end_pr = next_trading_price(date,pr)
