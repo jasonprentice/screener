@@ -1,0 +1,283 @@
+{% extends "base_template.html" %}
+
+
+{% block title %} 
+     Screener
+{% endblock %}
+
+{% block content %}
+
+<style>
+#chart g.nv-scatter g.nv-series-0 path.nv-point
+{
+    fill-opacity: 0;
+    stroke-opacity: 0;
+}
+</style>
+
+<div class="container" ng-app="priceChart">
+
+<ul class="nav nav-tabs">
+  <li role="presentation" class="active"><a href="#">Recommended Portfolio</a></li>  
+  <li role="presentation"><a href="/">All Companies</a></li>
+</ul>	 
+	
+{% raw %}
+
+<div id="chart" ng-controller="chartCtrl">
+
+	 <div class="row">	 	 
+	     <div class="col-md-1">
+		    <!-- <form class="form"> -->
+		  	<div class="form-group" style="margin-top: 60px;">
+		  		
+			    <div class="row">
+					<label for="numstocks">Number of stocks </label>
+					<input id="numstocks" type="number" class="form-control" name="quantity" min="1" max="500" placeholder="30" ng-model="n">
+				</div>
+				<div class="row" style="margin-top: 20px;">					 
+					<label for="reblaance" >Rebalance frequency</label>
+					<select id="rebalance" class="form-control" ng-model="rebalance_freq">
+					  <option value="3">3 Months</option>
+					  <option selected="selected" value="6">6 Months</option>
+					  <option value="12">12 Months</option>
+					  <option value="-1">Never</option>
+					</select>
+				</div>
+				<div class="row" style="margin-top: 20px;">
+					<b> Trading venue </b>					
+					<div class="checkbox">
+						<!-- <ul class="list-unstyled"> -->
+					  	<label><input type="checkbox" value="otc" checked ng-model="include_otc">OTC</label>
+					  	<label><input type="checkbox" value="otc" checked ng-model="include_exchange">Exchange</label>
+					  <!-- </ul> -->
+					</div>	
+				
+				</div>
+				<div class="row" style="margin-top: 20px;">	
+					<div ng-if="show_refresh_button">				
+						<button type="button" class="btn btn-primary" ng-click="tickerLookup()"> Refresh </button> 						
+					</div>
+					<div ng-if="!show_refresh_button">
+						<button type="button" disabled="disabled" class="btn btn-primary" ng-click="tickerLookup()"> Loading </button> 						
+					</div>
+				</div>							
+			</div>
+			<!-- </form> -->
+		</div>
+		<div class="col-md-11">
+			<div class="row text-right" style="margin-top: 10px; width: 80%;">
+				<!-- <div class="inline-form-group"> -->
+		  			<b> Click chart to change purchase date </b>					
+					  <!-- <label class="radio-inline">
+					    <input type="radio" name="click_option" id="change_date" value="change_date" checked>
+					    Change purchase date
+					  </label>									
+					  <label class="radio-inline">
+					    <input type="radio" name="click_option" id="composition" value="composition">
+					    View portfolio composition
+					  </label>					 -->
+				<!-- </div> -->
+		  	</div>
+		  	<div class="row" style="margin-top: 10px;">
+			<svg></svg>      
+			</div>       
+	    </div>		 
+	</div> 
+
+	<div class="row">
+		<div class="col-md-2"></div>
+		<div class="col-md-10 text-left">
+			<a name="panel"></a>
+			<div class="panel panel-default" style='width:80%' ng-if="show_allocation">	
+				
+				  <ul class="nav nav-pills">
+  					<li role="presentation" class="active"><a href="#panel">Holdings</a></li>
+				    <li role="presentation"><a ng-click="showMetrics()" href="#panel">Metrics</a></li>
+				  </ul>
+				  <div class="panel-heading">
+		 		<h1 class="panel-title">Portfolio composition as of {{ last_date }} </h1>
+		 		</div>
+				<div class="panel-body">
+				<table class="table table-condensed table-bordered" style='width:100%'>        
+					<tr>			
+						<th style='width;50%'> Long </th>
+						<th style='width:50%'> Short </th>
+					</tr>
+			        <tr ng-repeat="row in companies">        	
+			            <td style='width:50%'> <a target='_blank' href='/companies/{{ row.long_cik }}'>{{ row.long_name }}</a> </td>
+			            <td style='width:50%'> <a target='_blank' href='/companies/{{ row.short_cik }}'>{{ row.short_name }}</a> </td>
+				    </tr>
+				</table>
+				</div>
+			</div>
+
+			<div class="panel panel-default" style='width:80%' ng-if="!show_allocation">	
+				
+				  <ul class="nav nav-pills">
+  					<li role="presentation"><a ng-click="showAllocation()" href="#panel">Holdings</a></li>
+				    <li role="presentation" class="active"><a href="#panel">Metrics</a></li>
+				  </ul> 
+				  <div class="panel-heading">
+				  <h1 class="panel-title">Risk metrics from Fama-French 3 factor regression </h1>
+		 		</div>
+				<div class="panel-body">
+				<table class="table table-condensed table-bordered" style='width:100%'>        
+					<tr>			
+						<th style='width:50%':></th>
+						<th style='width:25%'> Suggested portfolio </th>
+						<th style='width:25%'> S&amp;P 500 </th>
+					</tr>
+			        <tr> 
+			        	<td> <b> Alpha (monthly) </b> </td> <td> {{ FF_screener.alpha | number:2 }}% </td> <td> {{ FF_SPY.alpha | number:2 }}% </td>
+			        </tr>
+			        <tr>
+			        	<td> <b> Beta (Market) </b> </td> <td> {{ FF_screener.Mkt | number:2}} </td> <td> {{ FF_SPY.Mkt | number:2 }} </td>
+			        </tr>
+			        <tr>
+			        	<td> <b> Beta (Small-minus-Big market cap) </b> </td> <td> {{ FF_screener.SMB | number:2}} </td> <td> {{ FF_SPY.SMB | number:2 }} </td>
+			        </tr>
+			        <tr>
+			        	<td> <b> Beta (High-minus-Low book/price) </b></td> <td> {{ FF_screener.HML | number:2}} </td> <td> {{ FF_SPY.HML | number:2}} </td>
+			        </tr>
+			        <tr>
+			        	<td> <b> Sharpe Ratio (monthly) </b> </td> </td> <td> {{ FF_screener.SharpeRatio | number:2}} </td> <td> {{ FF_SPY.SharpeRatio | number:2}} </td>
+			        </tr>
+				</table>
+				</div>
+			</div>
+		
+		</div>		
+	</div>
+</div>
+
+</div>
+{% endraw %}
+
+<script>
+
+var priceChart = angular.module('priceChart', []);
+
+priceChart.controller('chartCtrl', function ($scope, $http) {
+	
+	refreshData('2012-06-01');
+	$scope.num_cols = 3;
+	$scope.n = 30;
+	$scope.rebalance_freq = 6
+	$scope.last_date = '2012-06'
+	$scope.include_otc = true
+	$scope.include_exchange = true
+	$scope.show_refresh_button = false
+
+	$scope.show_allocation = true
+
+	$scope.tickerLookup = function () {
+		if(typeof $scope.xclick === 'undefined'){
+   			$scope.xclick = '2012-06-01'
+ 		};
+		refreshData($scope.xclick)
+	}
+
+	$scope.showAllocation = function () {
+		$scope.show_allocation = true;
+	}
+	$scope.showMetrics = function() {
+		$scope.show_allocation = false;
+	}
+
+	function formatCompaniesTable(short_companies, long_companies) {
+		$scope.companies_per_column = $scope.n;
+		$scope.companies = []
+    	for (i=0; i<$scope.companies_per_column; i++) {    		
+    		for (col=0; col<$scope.n; col++) {
+    			$scope.companies[i] = {'short_name':short_companies[i].name, 'short_cik':short_companies[i].cik, 'long_name':long_companies[i].name, 'long_cik': long_companies[i].cik};
+    		}    	
+    	}	    	    	
+	}
+
+
+	function refreshData(date) {				
+		if(typeof $scope.n === 'undefined'){
+   			$scope.n = 30;
+ 		};
+ 		if(typeof $scope.rebalance_freq === 'undefined'){
+ 			$scope.rebalance_freq = 6;
+ 		};
+ 		if (typeof $scope.show_refresh_button === 'undefined') {
+ 			$scope.show_refresh_button = false;
+ 		};
+ 		if (typeof $scope.include_otc === 'undefined') {
+ 			$scope.include_otc = true;
+ 		};
+ 		if (typeof $scope.include_exchange === 'undefined') {
+ 			$scope.include_exchange = true;
+ 		};
+ 		$scope.show_refresh_button = false;
+ 		var request = '/get_chart?date=' + date + '&n='+ $scope.n + '&rebalance=' + $scope.rebalance_freq + '&otc=' + $scope.include_otc + '&exchange=' + $scope.include_exchange
+		$http.get(request).success(function(data) {
+				$scope.show_refresh_button = true;
+		    	$scope.chart_data = data;
+		    	$scope.last_date = data.last_rebalance_date;
+
+		    	$scope.FF_SPY = data.FF_SPY;
+		    	$scope.FF_screener = data.FF_screener;
+		    	formatCompaniesTable(data.short_companies, data.long_companies);
+		    	console.log($scope.companies);		    	
+		    	drawChart(); });
+	}
+	
+	function drawChart() {		
+		var parseDate = d3.time.format("%Y-%m-%d").parse;		
+
+		nv.addGraph(function() {
+	    chart = nv.models.lineChart()
+	                .x(function(d) { return parseDate(d.x); })                
+	                .margin({top: 10, right: 100, bottom: 50, left: 75})
+	                .useInteractiveGuideline(true)
+	                .interpolate('step-before')               
+	                .showLegend(true)
+	                .showYAxis(true)
+	                .showXAxis(true)                    
+
+	    var x = d3.time.scale();
+
+	    chart.xAxis	         
+	     	 .scale(x)
+	      	 .tickFormat(function(d) { return d3.time.format('%b, %Y')(new Date(d)) });
+
+	 	chart.xScale(d3.time.scale());
+
+	 	chart.yAxis     //Chart y-axis settings
+		     .axisLabel('Value (relative to initial investment)')
+		     .tickFormat(d3.format('.02f'));	      
+	    
+
+	    chart.lines.dispatch.on("elementClick", function (e) {		 		
+	 		$scope.xclick = e[0].point.x
+	 		refreshData(e[0].point.x);
+	 		$scope.$apply();	 		
+		}); 
+
+	    d3.select('#chart svg')   
+	      .datum($scope.chart_data.result)
+	      .call(chart);         	     
+	  });
+	};	
+
+	window.addEventListener('resize', function(event){
+		d3.select('#chart svg')
+				.call(chart);
+	});
+
+
+});		
+</script>
+
+<style>
+#chart svg { width: 90%; height: 70%;}
+#chart svg text {font-size: 16px;} 
+</style>
+	
+</div>
+
+{% endblock %}
