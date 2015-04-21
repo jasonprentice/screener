@@ -8,6 +8,7 @@ from io import StringIO
 import pickle
 import sys
 import time
+from math import floor
 
 app = Flask(__name__)
 conn = psycopg2.connect("dbname=secdata user=vagrant password=pwd")
@@ -16,7 +17,7 @@ pred_neg = returnPredictor()
 
 @app.route('/')
 def main_site():
-	return render_template('list_by_exchange.html')
+	return render_template('chart_ui.html')
 
 #@app.route('/filter/<filter_tag>/')
 @app.route('/filter/<filter_tag>/<page>')
@@ -55,42 +56,70 @@ def get_chart():
 	date = request.args['date']
 	n = int(request.args['n'])
 	rebalance_freq = int(request.args['rebalance'])
+	include_otc = request.args['otc']
+	include_exchange = request.args['exchange']
+
+	venue = []
+	if include_otc=='true':
+		venue = venue + ['OTC']
+	if include_exchange=='true':
+		venue = venue + ['exchange']
+	
 #	ciks = ptf.tickers_to_ciks([ticker])
 	
 	end_date = pd.to_datetime('2015-01-01','%Y-%m-%d')
 	max_date = pd.to_datetime('2014-06-01','%Y-%m-%d')
-	
-	rebalance_date = pd.to_datetime(date, '%Y-%m-%d')
+	init_date = pd.to_datetime(date, '%Y-%m-%d')
+	rebalance_date = init_date
 	
 	portfolio.strategies['S&P 500'].rebalance(['SPY'],[1.0], date=rebalance_date)
 	while rebalance_date < max_date:		
-		(ciks,weights) = top_scorers(rebalance_date, n=n)				
-		(bottom_ciks,bottom_weights) = bottom_scorers(rebalance_date, n=n)			
-		print bottom_weights	
-		portfolio.strategies['Top scorers'].rebalance(ciks + bottom_ciks, [-0.5]*len(ciks) + [1.0]*len(bottom_ciks), date=rebalance_date)		
+		(short_ciks, short_weights) = top_scorers(rebalance_date, shorts_lookup, n=n, venue=venue)
+		(long_ciks,long_weights) = top_scorers(rebalance_date, longs_lookup, n=n, venue=venue)
+		# short_ciks = ['0001092367']
+		# long_ciks = ['0000001750']
+		portfolio.strategies['Suggested portfolio'].rebalance(short_ciks + long_ciks, [-0.25]*len(short_ciks) + [1.0]*len(long_ciks), date=rebalance_date)		
 		if rebalance_freq > 0:
 			rebalance_date += np.timedelta64(rebalance_freq,'M')
 		else:
 			break
-	
+
 	v = portfolio.values(begin=inception_date,end=end_date)	
-	
-	portfolio.strategies['Top scorers'].reset()
+
+	FF_SPY = portfolio.FamaFrench(init_date, end_date, 'S&P 500')	
+	FF_screener = portfolio.FamaFrench(init_date, end_date, 'Suggested portfolio')
+
+	portfolio.strategies['Suggested portfolio'].reset()
 	portfolio.strategies['S&P 500'].reset()
 
 	v = v.fillna(method='ffill')
 	
 	t = v.index
-	#t = pd.date_range(date,'2015-04-16', freq='M')	
 	X = map(lambda d: '%d-%02d-%02d' %(d.year, d.month, d.day), t)
-	Y = v['Top scorers'].values
-	#Y = np.random.randn(len(X))
+	Y = v['Suggested portfolio'].values
+				
+	values = [{'x':x, 'y':y} for (x,y) in zip(X,Y) if pd.notnull(y)]
+	spy = [{'x':x, 'y':y} for (x,y) in zip(X, v['S&P 500'].values) if pd.notnull(y)]
 
+	
+	mo_names = {'01':'Jan', '02':'Feb', '03':'Mar', '04':'Apr', '05':'May', '06':'Jun', '07':'Jul', '08':'Aug', '09':'Sep', '10':'Oct', '11':'Nov', '12':'Dec'}
+	
+	short_companies = [{'name':name, 'ticker':ticker, 'cik':cik} for (name,ticker,cik) in get_company_info(short_ciks)]
+	long_companies = [{'name':name, 'ticker':ticker, 'cik':cik} for (name,ticker,cik) in get_company_info(long_ciks)]
+	return jsonify([('result', [
+		                 {'values':values, 'key':'Suggested portfolio', 'color':'#009999'},
+		                 {'values':spy, 'key':'S&P 500', 'color':'#990000'}
+		                       ]),
+	                ('short_companies', short_companies), 
+	                ('long_companies', long_companies),
+	                ('last_rebalance_date', '%s, %d' % (mo_names['%02d' % rebalance_date.month], rebalance_date.year)),
+	                ('FF_SPY', FF_SPY),
+	                ('FF_screener', FF_screener)])
+	                
+def get_company_info(ciks):	
 	conames = []
 	tickers = []
-
-	t0 = time.clock()
-	for cik in ciks:
+	for cik in ciks:		
 		db = pd.read_sql("SELECT name,ticker FROM companies WHERE cik=%s;", conn, params=(cik,))	
 		coname = db.loc[0,'name']
 		ticker = db.loc[0,'ticker']
@@ -98,19 +127,9 @@ def get_chart():
 		if coname[-1] == '-':
 			coname = coname[:-1]
 		conames.append(coname)
-		tickers.append(ticker)
-	print '%s s to get company info' % (time.clock() - t0)
-	sys.stdout.flush()
+		tickers.append(ticker)		
+	return zip(conames, tickers,ciks)
 
-	values = [{'x':x, 'y':y} for (x,y) in zip(X,Y) if pd.notnull(y)]
-	spy = [{'x':x, 'y':y} for (x,y) in zip(X, v['S&P 500'].values) if pd.notnull(y)]
-	companies = [{'name':name, 'ticker':ticker, 'score':weight} for (name,ticker, weight) in zip(conames,tickers, weights)]
-	return jsonify([('result', [
-		                 {'values':values, 'key':'Top scorers', 'color':'#009999'},
-		                 {'values':spy, 'key':'S&P 500', 'color':'#990000'}
-		                       ]),
-	                ('companies', companies)])
-	                
 
 @app.route('/chart/')
 def chart():
@@ -264,14 +283,14 @@ def lookup_cik(cik):
 # def screener():
 
 
-def load_scores():
+def load_scores(pickle_file):
 	yrs = range(2010,2015)
 	mos = range(1,13)
 	yrmos = [('%d'%yr,'%02d'%mo) for yr in yrs for mo in mos]
 
 	df = pd.DataFrame(columns=['cik','date','w'])	
 	for (yr,mo) in yrmos:    
-	    fname = '../data/pickles/%s/%s/negative_model.pickle' % (yr,mo)
+	    fname = '../data/pickles/%s/%s/%s' % (yr,mo,pickle_file)
 	    ok = False
 	    try:
 	        f = open(fname,'r')
@@ -305,21 +324,46 @@ def score_lookup_table(all_scores, window=4):
 			except IndexError:
 				break	
 
-	unpack_and_sort = lambda d: sorted(d.iteritems(), key=lambda (_,w): w, reverse=True)		
-	tuples_table = map(unpack_and_sort, dicts_table)	
-	lookup_table = dict(zip(dates, tuples_table))
+	exchange_lookup = pd.read_sql("SELECT cik,exchange FROM companies;", conn)
+	exchange_lookup = dict(zip(exchange_lookup.cik.values, exchange_lookup.exchange.values))
+	def unpack_and_sort_otc(d):
+		l = ((cik,score) for (cik,score) in d.items() if exchange_lookup[cik]=='OTC')
+		s = sorted(l, key=lambda (_,w): w, reverse=True)			
+		return s
+	def unpack_and_sort_exchange(d):
+		l = ((cik,score) for (cik,score) in d.items() if exchange_lookup[cik] in ['N','A','NASDAQ'])
+		s = sorted(l, key=lambda (_,w): w, reverse=True)			
+		return s
 
+	tuples_table_otc = map(unpack_and_sort_otc, dicts_table)	
+	tuples_table_exchange = map(unpack_and_sort_exchange, dicts_table)	
+	lookup_table = {'OTC':[], 'exchange':[]}
+	lookup_table['OTC'] = dict(zip(dates, tuples_table_otc))
+	lookup_table['exchange'] = dict(zip(dates, tuples_table_exchange))
 	return lookup_table
 
 
+def top_scorers(date, score_lookup, n=30, venue=['OTC','exchange']):
+	
+	if venue: 
+		datestr = '%d-%02d' % (date.year, date.month)
+		top = []
+		for item in venue:
+			l = score_lookup[item][datestr]
+			top = top + l[:n]
+		top = sorted(top, key=lambda (_,w): w, reverse=True)
+		top = top[:n]	
+		return zip(*top)
+	else:
+		return ([],[])
 
-def top_scorers(date, n=30):	
-	datestr = '%d-%02d' % (date.year, date.month)
-	return zip(*score_lookup[datestr][:n])
+# def bottom_scorers(date, n=30, exchanges=['OTC','N','A','NASDAQ']):
+# 	datestr = '%d-%02d' % (date.year, date.month)
+# 	i = 0
+# 	top = 
+# 	while i < n:
 
-def bottom_scorers(date, n=30):
-	datestr = '%d-%02d' % (date.year, date.month)
-	return zip(*score_lookup[datestr][-n:])	
+# 	return zip(*score_lookup[datestr][-n:])	
 	#in_range = all_scores[(all_scores.date > after) & (all_scores.date < before)] 
 	# def max_date(g):
 	# 	g = g.reset_index()
@@ -338,10 +382,12 @@ if __name__ == '__main__':
 	# pred_neg.train(-0.05,'lt', datestr='12 2013', exchanges=['NASDAQ','N','A','OTC'])
 	# pred_pos.evaluate(50,'topquant', after='01 2014', exchanges=['NASDAQ','N','A','OTC'])
 	# pred_neg.evaluate(-0.05,'lt', after='01 2014', exchanges=['NASDAQ','N','A','OTC'])
-	score_lookup = score_lookup_table(load_scores())
+	
+	shorts_lookup = score_lookup_table(load_scores('negative_model.pickle'))
+	longs_lookup = score_lookup_table(load_scores('model.pickle'))
 	inception_date = pd.to_datetime('2010-09-01','%Y-%m-%d')
 	portfolio = ptf.portfolioBacktester(inception_date)	
-	portfolio.create_strategy('Top scorers')
+	portfolio.create_strategy('Suggested portfolio')
 	portfolio.create_strategy('S&P 500')
 	app.run('0.0.0.0',debug=True)
 	conn.close()

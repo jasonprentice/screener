@@ -11,9 +11,9 @@ import sys
 import time
 
 def next_trading_price(date, pr):	
+	date = pd.Timestamp('%d-%02d-%02d' % (date.year, date.month, date.day))	
 	date0 = date
-	while date <= date0 + np.timedelta64(3,'D'):		
-		
+	while date <= date0 + np.timedelta64(4,'D'):				
 		try:
 			cur_pr = pr.loc[date]
 			if not pd.isnull(cur_pr):
@@ -22,7 +22,7 @@ def next_trading_price(date, pr):
 				date += np.timedelta64(1,'D')	
 		except:
 			date += np.timedelta64(1,'D')
-	return None	
+	return 0
 
 def tickers_to_ciks(tickers):
 	conn = psycopg2.connect('dbname=secdata user=vagrant password=pwd')
@@ -90,29 +90,40 @@ class Portfolio:
 		self.value_ = self.all_prices.dot(self.num_shares)
 		self.event_queue = []
 
+
 	def load_stock(self, cik):		
 		try: 			
 			return self.all_prices[cik]
 		except:			
 			#try:
 			if self.universe is not None:
-				pr = self.universe[cik]
-
+				pr = self.universe[cik]				
 			else:
 				base_dir = '../data/edgar/'
 				f = open(base_dir + cik + '/all_daily_prices.pickle','r')
 				pr = pickle.load(f)
 				f.close()	
-
 				pr = pr.iloc[:-2].astype('float')
 
-			# On latest date for which we have a price, assume position gets liquidated at that price			
-			heapq.heappush(self.event_queue, Event(time=pr.last_valid_index(), ciks=[cik], data=None, type='liquidate'))
+			pr = pr.reindex(self.index)
+			pr = pr.fillna(method='bfill',limit=3)
+
+			# Liquidate stock if holding and drops below 0.01
+			liquidate_times = pr[np.logical_and(pr < 0.01, pr.shift(1) >= 0.01)].index 
+			for t in liquidate_times:
+				if t > self.last_trade_date:
+					pair = (t, Event(time=t, ciks=[cik], data=None, type='liquidate'))
+					heapq.heappush(self.event_queue, pair)	
+			# On latest date for which we have a price, assume position gets liquidated at that price	
+			t = pr.last_valid_index()
+			if t > self.last_trade_date:
+				pair = (t, Event(time=t, ciks=[cik], data=None, type='liquidate'))
+				heapq.heappush(self.event_queue, pair)
 			# except:				
 			# 	pr = pd.Series(float('NaN'),index=self.index)
 				#raise ValueError('No price information for CIK %s' % cik)	
 			
-			self.all_prices[cik] = pr			
+			self.all_prices[cik] = pr					
 			self.num_shares[cik] = 0
 			return pr.reindex(self.index)
 			
@@ -122,15 +133,15 @@ class Portfolio:
 	def liquidation_handler(self, event):
 
 		# Sell all shares of a stock (or cover short position), then reinvest proceeds into remaining holdings
-		date = event.time
-		cik = event.ciks[0]
-		print 'liquidation: %s' % cik
+		date = event.time				
+		cik = event.ciks[0]		
+		# print 'liquidation: %s' % cik		
 		if self.num_shares[cik] != 0:
 			V = next_trading_price(date,self.value_)	
 			p = next_trading_price(date,self.all_prices[cik])
 			C = p*self.num_shares[cik]
 
-			self.num_shares[cik] = 0
+			self.num_shares[cik] = 0			
 			self.num_shares = self.num_shares * (V / (V-C))
 		
 
@@ -141,27 +152,20 @@ class Portfolio:
 		ciks = event.ciks
 		weights = event.data
 
-		alpha = 0.5
+		tot = 0		
 
-		tot = 0
-		V = next_trading_price(date,self.value_)						
-		
+		V = next_trading_price(date,self.value_)				
 		self.num_shares = pd.Series(0, index=self.num_shares.index)
 		for (cik, weight) in zip(ciks,weights):	
 			pr = self.load_stock(cik)
 
 			cur_price = next_trading_price(date, pr)			
-			if cur_price:				
-				# print cur_price
-				# sys.stdout.flush()
+			if cur_price:								
 				tot += weight
-				self.num_shares.loc[cik] += (weight * V) / cur_price
-			
-		# if (tot > 0 and V <= 0) or (tot < 0 and V >= 0) or (tot==0 and V != 0):
-		# 	raise ValueError('Rebalancing may not change sign of net portfolio value!')	
+				self.num_shares.loc[cik] += (weight * V) / cur_price				
+					
+		self.num_shares = self.num_shares / tot		
 		
-		self.num_shares = self.num_shares / tot
-		#print self.num_shares
 		
 	def sell_handler(self,event):		
 		date = event.time
@@ -201,15 +205,17 @@ class Portfolio:
 		# Handle all events before date, then set last_trade_date = date
 		# After calling commit, self.value_ is accurate for all times before date
 		# and self.num_shares holds between date and next unprocessed event
-
-		while self.event_queue and self.event_queue[0].time <= date:			
-			event = heapq.heappop(self.event_queue)			
-			V0 = next_trading_price(event.time,self.value_)						
-			self.event_handlers[event.type](event)
-			
+				
+		while self.event_queue and self.event_queue[0][0] <= date:
+			event = heapq.heappop(self.event_queue)[1]			
+			self.last_trade_date = event.time
+			#if event.time >= self.last_trade_date:			
+			V0 = next_trading_price(event.time,self.value_)			
+			self.event_handlers[event.type](event)			
 			tmp = self.all_prices.dot(self.num_shares)
-			self.value_.loc[self.value_.index >= event.time] = tmp.loc[self.value_.index >= event.time]
-			V1 = next_trading_price(event.time,self.value_)						
+
+			self.value_.loc[self.value_.index >= event.time] = tmp.loc[self.value_.index >= event.time]			
+			V1 = next_trading_price(event.time,self.value_)
 			#print '%s event: %0.2f -> %0.2f' % (event.type, V0, V1)
 		self.last_trade_date = date
 		
@@ -222,19 +228,22 @@ class Portfolio:
 
 	@checkdate	
 	def sell(self, ciks, amount, date, commit=True):
-		heapq.heappush(self.event_queue, Event(time=date, ciks=ciks, data=amount, type='sell'))				
+		pair = (date, Event(time=date, ciks=ciks, data=amount, type='sell'))
+		heapq.heappush(self.event_queue, pair)			
 		if commit:
 			self.commit(date)
 
 	@checkdate	
 	def buy(self, ciks, amount, date, commit=True):		
-		heapq.heappush(self.event_queue, Event(time=date, ciks=ciks, data=amount, type='buy'))					
+		pair = (date, Event(time=date, ciks=ciks, data=amount, type='buy'))
+		heapq.heappush(self.event_queue, pair)					
 		if commit:
 			self.commit(date)
 
 	@checkdate	
 	def rebalance(self, ciks, weights, date, commit=True):				
-		heapq.heappush(self.event_queue, Event(time=date, ciks=ciks, data=weights, type='rebalance'))		
+		pair = (date, Event(time=date, ciks=ciks, data=weights, type='rebalance'))
+		heapq.heappush(self.event_queue, pair)		
 		if commit:
 			self.commit(date)
 		
@@ -294,7 +303,9 @@ class portfolioBacktester:
 		return df
 
 	def binned_returns(self, begin, end):
-		tbins = pd.date_range(begin,end,freq='M')
+		begin_str = '%d-%02d-01' % (begin.year,begin.month)
+		end_str = '%d-%02d-01' % (end.year,end.month)
+		tbins = pd.date_range(begin_str,end_str,freq='M')
 		df = pd.DataFrame(columns=self.strategies.keys(), index=pd.PeriodIndex(tbins[:-1].values, freq='M'))
 		for name, p in self.strategies.iteritems():
 			try:
@@ -302,9 +313,12 @@ class portfolioBacktester:
 			except:
 				v = p.values()
 			
-			vsub = pd.Series(map(lambda t: next_trading_price(t,v), tbins), index=tbins)
-			delta = np.diff(vsub.values)
-			df[name] = pd.Series(12 * 10 * delta / vsub.values[:-1], index=pd.PeriodIndex(tbins[:-1].values, freq='M'))
+			vsub = pd.Series(map(lambda t: next_trading_price(t,v), tbins), index=tbins)			
+			#vsub = pd.Series(map(lambda t: v[t], tbins), index=tbins)
+			ret = 100 * (vsub.shift(-1) - vsub) / vsub			
+			df[name] = pd.Series((ret.values)[:-1], index=pd.PeriodIndex(tbins.values, freq='M')[1:])
+			# delta = np.diff(vsub.values)
+			# df[name] = pd.Series(12 * 10 * delta / vsub.values[:-1], index=pd.PeriodIndex(tbins[:-1].values, freq='M'))
 		return df
 
 	def CAPM(self,end, strat):
@@ -313,7 +327,7 @@ class portfolioBacktester:
 		print 'alpha = %0.2f' % beta[0]
 		print 'Mkt beta = %0.2f' % beta[1] 
 		
-		plt.scatter(self.FF['Mkt-RF'], ret[strat] - self.FF['RF'])
+		plt.scatter(self.FF['Mkt-RF'], ret[strat] - self.FF['RF'])		
 		xmin, xmax = plt.xlim()
 
 		plt.plot([xmin,xmax], [beta[0] + beta[1]*xmin, beta[0] + beta[1]*xmax])
@@ -321,21 +335,21 @@ class portfolioBacktester:
 
 		return {'alpha':beta[0], 'Mkt beta':beta[1]}
 
-	def FamaFrench(self,end,strat):
-		ret = self.binned_returns(self.inception_date, end)		
+	def FamaFrench(self,start,end,strat):
+		ret = self.binned_returns(start, end)				
 		beta = self.regress(ret[strat], ['Mkt-RF','HML','SMB'])
+		sharpe_ratio = float(ret[strat].mean() / ret[strat].std())
+		# print 'alpha = %0.2f' % beta[0]
+		# print 'Market beta = %0.2f' % beta[1] 
+		# print 'High-minus-Low P/B beta = %0.2f' % beta[2]
+		# print 'Small-minus-Big market cap beta = %0.2f' % beta[3]
 
-		print 'alpha = %0.2f' % beta[0]
-		print 'Market beta = %0.2f' % beta[1] 
-		print 'High-minus-Low P/B beta = %0.2f' % beta[2]
-		print 'Small-minus-Big market cap beta = %0.2f' % beta[3]
+		# plt.scatter(self.FF['Mkt-RF'], ret[strat] - self.FF['RF'])
+		# xmin, xmax = plt.xlim()
 
-		plt.scatter(self.FF['Mkt-RF'], ret[strat] - self.FF['RF'])
-		xmin, xmax = plt.xlim()
-
-		plt.plot([xmin,xmax], [beta[0] + beta[1]*xmin, beta[0] + beta[1]*xmax])
-		plt.show()
-		return {'alpha':beta[0], 'Mkt beta':beta[1], 'HML beta':beta[2], 'SMB beta':beta[3]}
+		# plt.plot([xmin,xmax], [beta[0] + beta[1]*xmin, beta[0] + beta[1]*xmax])
+		# plt.show()
+		return {'alpha':beta[0], 'Mkt':beta[1], 'HML':beta[2], 'SMB':beta[3], 'SharpeRatio': sharpe_ratio}
 
 	def regress(self, ret, cols):
 		
